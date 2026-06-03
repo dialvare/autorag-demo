@@ -1,2 +1,2 @@
-# autorag-demo
+# AutoRag demo
 AutoRAG demo 
