@@ -1,0 +1,23 @@
+[
+  {
+    "question": "What are the requirements and benefits of the Youth Account?",
+    "correct_answers": ["The Youth Account is for people between 18 and 30 years old. It has no maintenance fees and includes free national transfers and a debit card at no cost."],
+    "correct_answer_document_ids": ["accounts.txt"]
+  },
+  {
+    "question": "What happens if I have a Premium Account but my payroll is 2000 euros?",
+    "correct_answers": ["If the payroll is less than 2500 euros per month, the Premium Account will apply a maintenance fee of 15 euros per month."],
+    "correct_answer_document_ids": ["accounts.txt"]
+  },
+  {
+    "question": "What advantages does the Gold Card offer for travel?",
+    "correct_answers": ["The Gold Card includes a travel assistance insurance that covers up to 50,000 euros for medical expenses abroad."],
+    "correct_answer_document_ids": ["cards.txt"]
+  },
+  {
+    "question": "How much does it cost to renew the Gold Card annually?",
+    "correct_answers": ["The annual renewal cost of the Gold Card is 90 euros."],
+    "correct_answer_document_ids": ["cards.txt"]
+  }
+]
+
