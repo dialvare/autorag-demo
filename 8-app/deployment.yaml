@@ -1,0 +1,128 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llama-stack-demo-config
+  namespace: llamastack
+  labels:
+    app: chatbot
+    app.kubernetes.io/name: chatbot
+    app.kubernetes.io/part-of: llamastack
+data:
+  INFERENCE_MODEL: redhataiqwen3-8b-fp8-dynamic
+  LLAMA_STACK_HOST: llamastack-custom-distribution-service
+  LLAMA_STACK_PORT: "8321"
+  VECTOR_STORE_ID: pizza-bank-production-v2
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chatbot
+  namespace: llamastack
+  annotations:
+    app.openshift.io/connects-to: '[{"apiVersion":"v1","kind":"Service","name":"llamastack-custom-distribution-service"}]'
+  labels:
+    app: chatbot
+    app.kubernetes.io/name: chatbot
+    app.kubernetes.io/component: chatbot
+    app.kubernetes.io/part-of: llamastack
+    app.openshift.io/runtime: python
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chatbot
+  template:
+    metadata:
+      labels:
+        app: chatbot
+        app.kubernetes.io/name: chatbot
+        app.kubernetes.io/part-of: llamastack
+    spec:
+      containers:
+        - name: chatbot
+          image: quay.io/dgarciap/chatbot:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8501
+              protocol: TCP
+          resources:
+            limits:
+              cpu: "1"
+              memory: 4Gi
+            requests:
+              cpu: 250m
+              memory: 500Mi
+          env:
+            - name: STREAMLIT_SERVER_FILE_WATCHER_TYPE
+              value: none
+            - name: STREAMLIT_SERVER_HEADLESS
+              value: "true"
+            - name: STREAMLIT_SERVER_ENABLE_CORS
+              value: "false"
+            - name: MCP_SERVER_URL
+              value: http://openshift-mcp-deployment.llamastack.svc.cluster.local:8080/mcp
+            - name: MCP_SERVER_LABEL
+              value: openshift-mcp-server
+          envFrom:
+            - configMapRef:
+                name: llama-stack-demo-config
+          livenessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chatbot
+  namespace: llamastack
+  labels:
+    app: chatbot
+    app.kubernetes.io/name: chatbot
+    app.kubernetes.io/part-of: llamastack
+spec:
+  type: ClusterIP
+  selector:
+    app: chatbot
+  ports:
+    - name: http
+      port: 8501
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: chatbot
+  namespace: llamastack
+  labels:
+    app: chatbot
+    app.kubernetes.io/name: chatbot
+    app.kubernetes.io/part-of: llamastack
+  annotations:
+    haproxy.router.openshift.io/timeout: 300s
+spec:
+  to:
+    kind: Service
+    name: chatbot
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None

@@ -1,6 +1,5 @@
 ---
 # ServiceAccount used by the OpenShift MCP server deployment.
-# Safe to apply if it already exists.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -10,7 +9,7 @@ metadata:
     app.kubernetes.io/part-of: openshift-mcp-server
 ---
 # Grant cluster-wide read access required by openshift-mcp-server tools such as
-# nodes_list, nodes_top, events_list (all namespaces), and metrics APIs.
+# nodes_top, events_list (all namespaces), and metrics APIs.
 #
 # The default MCP catalog binding uses the "view" ClusterRole, which is
 # namespace-scoped and cannot list nodes at cluster scope.
@@ -28,3 +27,18 @@ subjects:
   - kind: ServiceAccount
     name: mcp-viewer
     namespace: llamastack
+---
+# MCP server runtime configuration (toolsets, port, read-only mode).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openshift-mcp-server-config
+  namespace: llamastack
+  labels:
+    app.kubernetes.io/part-of: openshift-mcp-server
+data:
+  config.toml: |
+    log_level = 5
+    port = "8080"
+    read_only = true
+    toolsets = ["core", "config"]

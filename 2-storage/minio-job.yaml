@@ -1,0 +1,45 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+ name: minio-create-buckets
+ namespace: minio
+spec:
+ template:
+   metadata:
+     labels:
+       app: minio-setup
+   spec:
+     restartPolicy: OnFailure
+     containers:
+       - name: mc
+         image: quay.io/minio/mc:latest
+         env:
+           - name: MC_CONFIG_DIR
+             value: /tmp/.mc
+         command:
+           - /bin/bash
+           - -c
+           - |
+            # Create config directory in /tmp (has write permissions)
+            mkdir -p /tmp/.mc
+
+            # Wait for MinIO to be ready
+            until mc alias set myminio http://minio-api:9000 minioadmin minioadmin123; do
+              echo "Waiting for MinIO to be ready..."
+              sleep 5
+            done
+
+            echo "MinIO is ready, creating buckets..."
+
+            # Create buckets
+            mc mb myminio/pipeline-artifacts --ignore-existing
+            mc mb myminio/autorag-data --ignore-existing
+
+            # Set public policy for easier access (for demo purposes)
+            # For production, use proper IAM policies
+            mc anonymous set download myminio/pipeline-artifacts
+            mc anonymous set download myminio/autorag-data
+
+            echo "Buckets created successfully:"
+            mc ls myminio
+            echo "Setup complete!"
