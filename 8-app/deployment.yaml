@@ -9,7 +9,7 @@ metadata:
     app.kubernetes.io/name: chatbot
     app.kubernetes.io/part-of: llamastack
 data:
-  INFERENCE_MODEL: redhataiqwen3-8b-fp8-dynamic
+  INFERENCE_MODEL: vllm-inference/redhataiqwen3-8b-fp8-dynamic
   LLAMA_STACK_HOST: llamastack-custom-distribution-service
   LLAMA_STACK_PORT: "8321"
   VECTOR_STORE_ID: pizza-bank-production-v2
@@ -62,7 +62,7 @@ spec:
             - name: STREAMLIT_SERVER_ENABLE_CORS
               value: "false"
             - name: MCP_SERVER_URL
-              value: http://openshift-mcp-deployment.llamastack.svc.cluster.local:8080/mcp
+              value: http://openshift-mcp-server.llamastack.svc.cluster.local:8080/mcp
             - name: MCP_SERVER_LABEL
               value: openshift-mcp-server
           envFrom:
