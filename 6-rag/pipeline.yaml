@@ -597,13 +597,13 @@ root:
   inputDefinitions:
     parameters:
       chunk_overlap_in_tokens:
-        defaultValue: 128.0
-        description: Number of overlapping tokens between chunks
+        defaultValue: 256.0
+        description: Number of overlapping tokens between chunks (best pattern)
         isOptional: true
         parameterType: NUMBER_INTEGER
       chunk_size_in_tokens:
-        defaultValue: 2048.0
-        description: Maximum number of tokens per chunk
+        defaultValue: 1024.0
+        description: Maximum number of tokens per chunk (best pattern)
         isOptional: true
         parameterType: NUMBER_INTEGER
       embedding_dimension:
@@ -647,8 +647,8 @@ root:
         isOptional: true
         parameterType: BOOLEAN
       vector_store_name:
-        defaultValue: pizza-bank-production
-        description: Name of the vector store to store embeddings
+        defaultValue: pizza-bank-best-pattern
+        description: Name of the vector store to store embeddings (best pattern / chatbot default)
         isOptional: true
         parameterType: STRING
       vector_store_provider_id:

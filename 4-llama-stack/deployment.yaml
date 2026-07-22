@@ -15,8 +15,6 @@ spec:
           cpu: "4"
           memory: "12Gi"
       env:
-        - name: MCP_SERVER_URL
-          value: 'http://openshift-mcp-server.llamastack.svc.cluster.local:8080/mcp'
         - name: POSTGRES_HOST
           value: postgres-service.llamastack.svc.cluster.local
         - name: POSTGRES_PORT
@@ -30,10 +28,12 @@ spec:
             secretKeyRef:
               name: postgres-secret
               key: password
+        # Remote MiniLM via VLLM_EMBEDDING_* only. Keep sentence-transformers off
+        # so EMBEDDING_MODEL is not also registered as
+        # sentence-transformers/<name> (AutoRAG picks that broken id).
         - name: ENABLE_SENTENCE_TRANSFORMERS
-          value: "true"
-        - name: EMBEDDING_PROVIDER
-          value: sentence-transformers
+          value: "false"
+        # Remote LLM
         - name: INFERENCE_MODEL
           valueFrom:
             secretKeyRef:
@@ -59,6 +59,37 @@ spec:
             secretKeyRef:
               name: llm-secret
               key: VLLM_MAX_TOKENS
+        # Remote embedding model (vLLM / OpenShift AI predictor)
+        - name: EMBEDDING_MODEL
+          valueFrom:
+            secretKeyRef:
+              name: llm-secret
+              key: EMBEDDING_MODEL
+        - name: EMBEDDING_PROVIDER_MODEL_ID
+          valueFrom:
+            secretKeyRef:
+              name: llm-secret
+              key: EMBEDDING_PROVIDER_MODEL_ID
+        - name: VLLM_EMBEDDING_URL
+          valueFrom:
+            secretKeyRef:
+              name: llm-secret
+              key: VLLM_EMBEDDING_URL
+        - name: VLLM_EMBEDDING_TLS_VERIFY
+          valueFrom:
+            secretKeyRef:
+              name: llm-secret
+              key: VLLM_EMBEDDING_TLS_VERIFY
+        - name: VLLM_EMBEDDING_API_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: llm-secret
+              key: VLLM_EMBEDDING_API_TOKEN
+        - name: VLLM_EMBEDDING_MAX_TOKENS
+          valueFrom:
+            secretKeyRef:
+              name: llm-secret
+              key: VLLM_EMBEDDING_MAX_TOKENS
         - name: MILVUS_ENDPOINT
           valueFrom:
             secretKeyRef:

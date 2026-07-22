@@ -1,0 +1,250 @@
+---
+# Pizza Bank source docs for AutoRAG best-pattern LS-compatible ingest.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pizza-bank-docs
+  namespace: llamastack
+  labels:
+    app.kubernetes.io/part-of: autorag-demo
+    app.kubernetes.io/component: rag-ingest
+data:
+  cards.txt: |
+    Pizza Bank - Credit Card Policies (2026)
+
+    1. Gold Card:
+    The Gold Card has a default credit limit of 5000 euros.
+    It includes travel assistance insurance with medical coverage of up to 50,000 euros abroad.
+    It offers a 2% cashback program on all purchases made at supermarkets and gas stations.
+    The annual renewal cost is 90 euros.
+  accounts.txt: |
+    Pizza Bank - Account Policies (2026)
+
+    1. Youth Account:
+    The Youth Account is designed for customers between 18 and 30 years old.
+    It has no maintenance or administration fees.
+    It allows free national transfers and includes a debit card with no issuance fee.
+
+    2. Premium Account:
+    The Premium Account requires direct depositing a payroll of over 2500 euros per month.
+    It has a maintenance fee of 15 euros per month if the payroll requirement is not met.
+    It offers free international transfers and an assigned personal manager.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: best-pattern-ingest-script
+  namespace: llamastack
+  labels:
+    app.kubernetes.io/part-of: autorag-demo
+    app.kubernetes.io/component: rag-ingest
+data:
+  ingest.py: |
+    #!/usr/bin/env python3
+    """Create/reuse pizza-bank-best-pattern with AutoRAG best pattern chunking via LS files API."""
+    import json
+    import os
+    import sys
+    import urllib.error
+    import urllib.request
+    from pathlib import Path
+
+    LS_URL = os.environ.get(
+        "LS_URL",
+        "http://llamastack-custom-distribution-service.llamastack.svc.cluster.local:8321/v1",
+    ).rstrip("/")
+    STORE_NAME = os.environ.get("STORE_NAME", "pizza-bank-best-pattern")
+    EMBEDDING_MODEL = os.environ.get(
+        "EMBEDDING_MODEL", "sentence-transformers/nomic-ai/nomic-embed-text-v1.5"
+    )
+    EMBEDDING_DIM = int(os.environ.get("EMBEDDING_DIM", "768"))
+    CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "1024"))
+    CHUNK_OVERLAP = int(os.environ.get("CHUNK_OVERLAP", "256"))
+    DOCS_DIR = Path(os.environ.get("DOCS_DIR", "/docs"))
+
+
+    def request(method, path, data=None, headers=None, timeout=120):
+        hdrs = dict(headers or {})
+        body = None
+        if data is not None and not isinstance(data, (bytes, bytearray)):
+            body = json.dumps(data).encode()
+            hdrs.setdefault("Content-Type", "application/json")
+        elif isinstance(data, (bytes, bytearray)):
+            body = data
+        req = urllib.request.Request(
+            f"{LS_URL}{path}", data=body, headers=hdrs, method=method
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read()
+                return json.loads(raw.decode()) if raw else {}
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode(errors="replace")
+            raise RuntimeError(f"{method} {path} -> {exc.code}: {detail}") from exc
+
+
+    def multipart_file(path: Path, purpose: str = "assistants"):
+        boundary = "----BestPatternBoundary7MA4YWxkTrZu0gW"
+        filename = path.name
+        content = path.read_bytes()
+        parts = []
+        parts.append(
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="purpose"\r\n\r\n'
+            f"{purpose}\r\n".encode()
+        )
+        parts.append(
+            (
+                f"--{boundary}\r\n"
+                f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+                f"Content-Type: text/plain\r\n\r\n"
+            ).encode()
+            + content
+            + b"\r\n"
+        )
+        parts.append(f"--{boundary}--\r\n".encode())
+        body = b"".join(parts)
+        return request(
+            "POST",
+            "/files",
+            data=body,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        )
+
+
+    def main():
+        print(f"Llama Stack: {LS_URL}")
+        print(f"Store: {STORE_NAME} (chunk {CHUNK_SIZE}/{CHUNK_OVERLAP})")
+
+        stores = request("GET", "/vector_stores?limit=100").get("data") or []
+        vs = next((s for s in stores if s.get("name") == STORE_NAME), None)
+        if vs:
+            vs_id = vs["id"]
+            print(f"Reusing vector store {vs_id}")
+        else:
+            created = request(
+                "POST",
+                "/vector_stores",
+                {
+                    "name": STORE_NAME,
+                    "embedding_model": EMBEDDING_MODEL,
+                    "embedding_dimension": EMBEDDING_DIM,
+                    "provider_id": "milvus-remote",
+                    "metadata": {
+                        "autorag_pattern": "best",
+                        "chunk_size": str(CHUNK_SIZE),
+                        "chunk_overlap": str(CHUNK_OVERLAP),
+                    },
+                },
+            )
+            vs_id = created["id"]
+            print(f"Created vector store {vs_id}")
+
+        meta = request("GET", f"/vector_stores/{vs_id}")
+        completed = (meta.get("file_counts") or {}).get("completed", 0)
+        if completed >= 2:
+            print(f"Store already has {completed} indexed files — nothing to do.")
+            print(f"VECTOR_STORE_ID={vs_id}")
+            return 0
+
+        for name in ("cards.txt", "accounts.txt"):
+            path = DOCS_DIR / name
+            if not path.is_file():
+                raise FileNotFoundError(path)
+            print(f"Uploading {name} ...")
+            uploaded = multipart_file(path)
+            file_id = uploaded["id"]
+            request(
+                "POST",
+                f"/vector_stores/{vs_id}/files",
+                {
+                    "file_id": file_id,
+                    "chunking_strategy": {
+                        "type": "static",
+                        "static": {
+                            "max_chunk_size_tokens": CHUNK_SIZE,
+                            "chunk_overlap_tokens": CHUNK_OVERLAP,
+                        },
+                    },
+                },
+            )
+            print(f"Attached {name} ({file_id})")
+
+        print(f"Done. App resolves name '{STORE_NAME}' (id {vs_id}).")
+        print(f"VECTOR_STORE_ID={vs_id}")
+        return 0
+
+
+    if __name__ == "__main__":
+        try:
+            sys.exit(main())
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(1)
+---
+# Apply after Llama Stack is Ready (step 6 in the workshop):
+#   oc apply -f 6-rag/best-pattern-ingest.yaml
+#   oc delete job best-pattern-rag-ingest -n llamastack --ignore-not-found  # if re-running
+#   oc apply -f 6-rag/best-pattern-ingest.yaml
+#   oc wait -n llamastack --for=condition=complete job/best-pattern-rag-ingest --timeout=300s
+# Then deploy 8-app (VECTOR_STORE_ID=pizza-bank-best-pattern).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: best-pattern-rag-ingest
+  namespace: llamastack
+  labels:
+    app.kubernetes.io/part-of: autorag-demo
+    app.kubernetes.io/component: rag-ingest
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: autorag-demo
+        app.kubernetes.io/component: rag-ingest
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: ingest
+          image: registry.access.redhat.com/ubi9/python-312:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python3", "/scripts/ingest.py"]
+          env:
+            - name: LS_URL
+              value: http://llamastack-custom-distribution-service.llamastack.svc.cluster.local:8321/v1
+            - name: STORE_NAME
+              value: pizza-bank-best-pattern
+            - name: EMBEDDING_MODEL
+              value: sentence-transformers/nomic-ai/nomic-embed-text-v1.5
+            - name: EMBEDDING_DIM
+              value: "768"
+            - name: CHUNK_SIZE
+              value: "1024"
+            - name: CHUNK_OVERLAP
+              value: "256"
+            - name: DOCS_DIR
+              value: /docs
+          volumeMounts:
+            - name: docs
+              mountPath: /docs
+              readOnly: true
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+      volumes:
+        - name: docs
+          configMap:
+            name: pizza-bank-docs
+        - name: scripts
+          configMap:
+            name: best-pattern-ingest-script
+            defaultMode: 0755

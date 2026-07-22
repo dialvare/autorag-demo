@@ -1,0 +1,10 @@
+# Merge patch: adds MCP_SERVER_URL without replacing other env vars.
+# Apply after mcp-setup.yaml and once the MCP server is running in llamastack:
+#   oc patch llamastackdistribution llamastack-custom-distribution \
+#     -n llamastack --type=merge --patch-file=llamastack-mcp-connection.yaml
+spec:
+  server:
+    containerSpec:
+      env:
+        - name: MCP_SERVER_URL
+          value: 'http://openshift-mcp-server.llamastack.svc.cluster.local:8080/mcp'

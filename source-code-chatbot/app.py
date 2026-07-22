@@ -17,7 +17,7 @@ API_KEY = (
     or os.getenv("LLAMA_STACK_API_KEY", "").strip()
 )
 DEFAULT_MODEL = os.getenv("INFERENCE_MODEL", "redhataiqwen3-8b-fp8-dynamic")
-DEFAULT_VECTOR_STORE = os.getenv("VECTOR_STORE_ID", "pizza-bank-production")
+DEFAULT_VECTOR_STORE = os.getenv("VECTOR_STORE_ID", "pizza-bank-best-pattern")
 MCP_SERVER_LABEL = os.getenv("MCP_SERVER_LABEL", "openshift-mcp-server")
 MCP_SERVER_URL = os.getenv(
     "MCP_SERVER_URL",
@@ -26,18 +26,36 @@ MCP_SERVER_URL = os.getenv(
 REQUEST_TIMEOUT = int(os.getenv("LLAMA_STACK_REQUEST_TIMEOUT", "30"))
 TURN_TIMEOUT = int(os.getenv("LLAMA_STACK_TURN_TIMEOUT", "300"))
 MAX_OUTPUT_TOKENS = int(os.getenv("LLAMA_STACK_MAX_OUTPUT_TOKENS", "2048"))
+# MCP tool schemas alone can consume ~2k tokens; keep headroom under small
+# model context windows (e.g. VLLM_MAX_TOKENS=4096).
+MCP_MAX_OUTPUT_TOKENS = int(os.getenv("LLAMA_STACK_MCP_MAX_OUTPUT_TOKENS", "1024"))
 MAX_RESPONSE_CONTINUATIONS = int(os.getenv("LLAMA_STACK_MAX_RESPONSE_CONTINUATIONS", "2"))
 RAG_MAX_RESULTS = int(os.getenv("LLAMA_STACK_RAG_MAX_RESULTS", "5"))
+# AutoRAG best-pattern retrieval defaults (hybrid + weighted alpha 0.5)
+RAG_RANKER = os.getenv("LLAMA_STACK_RAG_RANKER", "weighted").strip()
+RAG_RANKER_ALPHA = float(os.getenv("LLAMA_STACK_RAG_RANKER_ALPHA", "0.5"))
+# Restrict MCP schemas so prompt+answer fit; override with comma-separated names.
+MCP_ALLOWED_TOOLS = [
+    t.strip()
+    for t in os.getenv(
+        "MCP_ALLOWED_TOOLS",
+        "pods_list_in_namespace,pods_get,pods_list,nodes_top,events_list,namespaces_list",
+    ).split(",")
+    if t.strip()
+]
 RAG_INSTRUCTIONS = (
     "Answer Pizza Bank product and policy questions using only information found in "
     "file_search results. Cite the retrieved documents. If file_search returns no "
     "relevant chunks, say the knowledge base has no matching information."
 )
 MCP_INSTRUCTIONS = (
-    "For OpenShift/Kubernetes cluster questions, use OpenShift MCP tools sparingly: "
-    "call nodes_top once and optionally events_list. Do not call pods_list unless the "
-    "user asks about specific pods. There is no nodes_list tool; use nodes_top for "
-    "node metrics."
+    "For OpenShift/Kubernetes questions, call the matching MCP tool immediately "
+    "(e.g. pods_list_in_namespace for pods in a namespace, nodes_top for nodes). "
+    "Do not narrate your plan. For pods_list_in_namespace pass ONLY the namespace "
+    "unless the user asks to filter; never set fieldSelector to bare 'status.phase'. "
+    "If a tool errors, retry once with simpler arguments. After tool results arrive, "
+    "prefer a short summary: counts by phase, then list only Running/Pending/Failed/"
+    "Error pods (skip long Completed job pods unless asked)."
 )
 COMBINED_TOOL_INSTRUCTIONS = (
     "Choose the right tool for each question. Use file_search only for Pizza Bank "
@@ -48,8 +66,9 @@ COMBINED_TOOL_INSTRUCTIONS = (
 )
 BASE_INSTRUCTIONS = (
     "You are a corporate assistant for Pizza Bank. Reply directly to the user in "
-    "plain language. Never include internal reasoning, thinking tags, or  blocks. "
-    "Keep answers concise but complete."
+    "plain language. Never include internal reasoning, <think> blocks, or step-by-step "
+    "planning. If a tool is needed, call it immediately with no preamble. "
+    "Keep answers concise but complete. /no_think"
 )
 
 
@@ -65,6 +84,11 @@ def _build_instructions(*, enable_rag, enable_mcp):
     return " ".join(parts)
 _THINKING_BLOCK_RE = re.compile(
     r"<(?:think|redacted_thinking)>.*?</(?:think|redacted_thinking)>",
+    re.DOTALL | re.IGNORECASE,
+)
+# Qwen often gets truncated mid-thought when max_output_tokens is low.
+_INCOMPLETE_THINKING_RE = re.compile(
+    r"<(?:think|redacted_thinking)>.*$",
     re.DOTALL | re.IGNORECASE,
 )
 
@@ -86,10 +110,12 @@ def _request_error_detail(exc):
         body = exc.response.text.strip()
         if "maximum context length" in body:
             return (
-                "The model context window was exceeded. This usually happens when MCP "
-                "tools return very large outputs (for example pods_list across all "
-                "namespaces). Click **Apply Changes and Restart Chat**, then ask a "
-                "more specific question such as *How are my nodes doing?*"
+                "The model context window was exceeded. With MCP enabled, tool schemas "
+                "alone can use ~2k tokens — if `VLLM_MAX_TOKENS` is 4096 and "
+                "`max_output_tokens` is too high, even *hi* fails. "
+                "Turn MCP off for simple chat, or raise `VLLM_MAX_TOKENS` (e.g. 8192+) "
+                "and keep MCP output tokens low. For cluster questions, ask something "
+                "narrow such as *How are my nodes doing?*"
             )
         if body:
             return f"{exc} — {body[:300]}"
@@ -168,7 +194,8 @@ def get_vector_stores():
                 continue
             name = (item.get("name") or "").strip()
             completed_files = (item.get("file_counts") or {}).get("completed", 0)
-            label = f"{name} ({store_id})" if name else store_id
+            base = f"{name} ({store_id})" if name else store_id
+            label = f"{base} · {completed_files} files"
             stores.append(
                 {
                     "id": store_id,
@@ -177,6 +204,8 @@ def get_vector_stores():
                     "completed_files": completed_files,
                 }
             )
+        # Prefer indexed stores at the top of the dropdown.
+        stores.sort(key=lambda s: (-s["completed_files"], s["name"], s["id"]))
         if stores:
             return stores, None
         return fallback, "Llama Stack returned no vector stores."
@@ -187,6 +216,9 @@ def get_vector_stores():
 def _pick_default_vector_store(stores):
     for store in stores:
         if store["id"] == DEFAULT_VECTOR_STORE or store["name"] == DEFAULT_VECTOR_STORE:
+            return store["id"]
+    for store in stores:
+        if store["completed_files"] > 0:
             return store["id"]
     return stores[0]["id"]
 
@@ -210,33 +242,39 @@ def _build_response_tools(*, enable_rag, selected_vstore, enable_websearch, enab
     tools = []
 
     if enable_rag and selected_vstore:
-        tools.append(
-            {
-                "type": "file_search",
-                "vector_store_ids": [selected_vstore],
-                "max_num_results": RAG_MAX_RESULTS,
+        file_search = {
+            "type": "file_search",
+            "vector_store_ids": [selected_vstore],
+            "max_num_results": RAG_MAX_RESULTS,
+        }
+        if RAG_RANKER:
+            file_search["ranking_options"] = {
+                "ranker": RAG_RANKER,
+                "alpha": RAG_RANKER_ALPHA,
             }
-        )
+        tools.append(file_search)
 
     if enable_websearch:
         tools.append({"type": "web_search"})
 
     if enable_mcp and MCP_SERVER_URL:
-        tools.append(
-            {
-                "type": "mcp",
-                "server_label": MCP_SERVER_LABEL,
-                "server_description": "OpenShift MCP server deployed via the MCP catalog",
-                "server_url": MCP_SERVER_URL,
-                "require_approval": "never",
-            }
-        )
+        mcp_tool = {
+            "type": "mcp",
+            "server_label": MCP_SERVER_LABEL,
+            "server_description": "OpenShift MCP server deployed via the MCP catalog",
+            "server_url": MCP_SERVER_URL,
+            "require_approval": "never",
+        }
+        if MCP_ALLOWED_TOOLS:
+            mcp_tool["allowed_tools"] = MCP_ALLOWED_TOOLS
+        tools.append(mcp_tool)
 
     return tools
 
 
 def _clean_model_text(text):
-    cleaned = _THINKING_BLOCK_RE.sub("", text).strip()
+    cleaned = _THINKING_BLOCK_RE.sub("", text)
+    cleaned = _INCOMPLETE_THINKING_RE.sub("", cleaned).strip()
     return cleaned
 
 
@@ -297,10 +335,16 @@ def _extract_response_text(data):
     if data.get("status") == "failed":
         return f"❌ **Response failed:** `{data.get('incomplete_details')}`"
     if data.get("status") == "incomplete":
-        return (
-            "⚠️ **The response was cut off before completion.** "
-            "Try a more specific question or disable Vector Search for cluster queries."
+        reason = (data.get("incomplete_details") or {}).get("reason", "unknown")
+        leftover = _clean_model_text(_extract_message_text(data) or "")
+        hint = (
+            "The model ran out of output tokens (often spent on hidden reasoning). "
+            "Click **Apply Changes and Restart Chat**, ask again, or raise "
+            "`VLLM_MAX_TOKENS` / `LLAMA_STACK_MCP_MAX_OUTPUT_TOKENS`."
         )
+        if leftover:
+            return f"{leftover}\n\n⚠️ **Incomplete response** ({reason}). {hint}"
+        return f"⚠️ **Incomplete response** ({reason}). {hint}"
 
     return (
         "⚠️ **No assistant message was returned.**\n"
@@ -331,7 +375,12 @@ def _run_response_turn(payload):
             break
 
         incomplete_details = response_data.get("incomplete_details") or {}
-        if incomplete_details.get("reason") != "max_output_tokens":
+        reason = incomplete_details.get("reason")
+        if reason not in ("max_output_tokens", "length"):
+            break
+
+        # Continuations need a stored response id; skip if store was disabled.
+        if payload.get("store") is False:
             break
 
         response_id = response_data.get("id")
@@ -341,7 +390,7 @@ def _run_response_turn(payload):
         payload = {
             "model": payload["model"],
             "previous_response_id": response_id,
-            "max_output_tokens": MAX_OUTPUT_TOKENS,
+            "max_output_tokens": payload.get("max_output_tokens", MAX_OUTPUT_TOKENS),
             "stream": False,
         }
 
@@ -407,6 +456,12 @@ with st.sidebar:
             f"Milvus ID: `{selected_vstore}` · "
             f"indexed files: {selected_store['completed_files']}"
         )
+        if selected_store["completed_files"] < 1:
+            st.error(
+                "This vector store has **0 indexed files**, so file_search will find "
+                "nothing. Pick `pizza-bank-best-pattern` (or any store with files > 0), "
+                "then click **Apply Changes and Restart Chat**."
+            )
 
     st.divider()
 
@@ -453,17 +508,21 @@ if prompt := st.chat_input("Type your question here..."):
                     enable_websearch=enable_websearch,
                     enable_mcp=enable_mcp,
                 )
+                max_output_tokens = (
+                    MCP_MAX_OUTPUT_TOKENS if enable_mcp else MAX_OUTPUT_TOKENS
+                )
 
                 response_payload = {
                     "model": selected_model,
-                    "input": prompt,
+                    "input": f"{prompt} /no_think" if enable_mcp else prompt,
                     "instructions": _build_instructions(
                         enable_rag=enable_rag,
                         enable_mcp=enable_mcp,
                     ),
-                    "temperature": temperature,
-                    "max_output_tokens": MAX_OUTPUT_TOKENS,
+                    "temperature": 0.2 if enable_mcp else temperature,
+                    "max_output_tokens": max_output_tokens,
                     "stream": False,
+                    "store": False,
                 }
                 if tools:
                     response_payload["tools"] = tools
