@@ -42,4 +42,18 @@ spec:
 
             echo "Buckets created successfully:"
             mc ls myminio
+
+            echo "Downloading data from GitHub..."
+            REPO_URL="https://raw.githubusercontent.com/dialvare/autorag-demo/main/2-storage/input_data"
+            wget -q ${REPO_URL}/accounts.txt -O /tmp/accounts.txt
+            wget -q ${REPO_URL}/cards.txt -O /tmp/cards.txt
+            wget -q https://raw.githubusercontent.com/dialvare/autorag-demo/main/2-storage/benchmark_data.json -O /tmp/benchmark_data.json
+
+            echo "Uploading data to autorag-data bucket..."
+            mc cp /tmp/accounts.txt myminio/autorag-data/input_data/accounts.txt
+            mc cp /tmp/cards.txt myminio/autorag-data/input_data/cards.txt
+            mc cp /tmp/benchmark_data.json myminio/autorag-data/benchmark_data.json
+
+            echo "Uploaded files:"
+            mc ls --recursive myminio/autorag-data
             echo "Setup complete!"
