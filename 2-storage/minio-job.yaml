@@ -10,6 +10,22 @@ spec:
        app: minio-setup
    spec:
      restartPolicy: OnFailure
+     initContainers:
+       - name: download-data
+         image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+         command:
+           - /bin/bash
+           - -c
+           - |
+            REPO_URL="https://raw.githubusercontent.com/dialvare/autorag-demo/main/2-storage"
+            curl -sL ${REPO_URL}/input_data/accounts.txt -o /data/accounts.txt
+            curl -sL ${REPO_URL}/input_data/cards.txt -o /data/cards.txt
+            curl -sL ${REPO_URL}/benchmark_data.json -o /data/benchmark_data.json
+            echo "Downloaded files:"
+            ls -la /data/
+         volumeMounts:
+           - name: shared-data
+             mountPath: /data
      containers:
        - name: mc
          image: quay.io/minio/mc:latest
@@ -43,17 +59,17 @@ spec:
             echo "Buckets created successfully:"
             mc ls myminio
 
-            echo "Downloading data from GitHub..."
-            REPO_URL="https://raw.githubusercontent.com/dialvare/autorag-demo/main/2-storage/input_data"
-            wget -q ${REPO_URL}/accounts.txt -O /tmp/accounts.txt
-            wget -q ${REPO_URL}/cards.txt -O /tmp/cards.txt
-            wget -q https://raw.githubusercontent.com/dialvare/autorag-demo/main/2-storage/benchmark_data.json -O /tmp/benchmark_data.json
-
             echo "Uploading data to autorag-data bucket..."
-            mc cp /tmp/accounts.txt myminio/autorag-data/input_data/accounts.txt
-            mc cp /tmp/cards.txt myminio/autorag-data/input_data/cards.txt
-            mc cp /tmp/benchmark_data.json myminio/autorag-data/benchmark_data.json
+            mc cp /data/accounts.txt myminio/autorag-data/input_data/accounts.txt
+            mc cp /data/cards.txt myminio/autorag-data/input_data/cards.txt
+            mc cp /data/benchmark_data.json myminio/autorag-data/benchmark_data.json
 
             echo "Uploaded files:"
             mc ls --recursive myminio/autorag-data
             echo "Setup complete!"
+         volumeMounts:
+           - name: shared-data
+             mountPath: /data
+     volumes:
+       - name: shared-data
+         emptyDir: {}
