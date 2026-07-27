@@ -1,0 +1,186 @@
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mariadb
+  namespace: llamastack
+  labels:
+    app: mariadb
+type: Opaque
+stringData:
+  MYSQL_USER: mcp_user
+  MYSQL_PASSWORD: mcp_pass
+  MYSQL_ROOT_PASSWORD: rootpass
+  MYSQL_DATABASE: mcp_db
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mariadb-init
+  namespace: llamastack
+  labels:
+    app: mariadb
+data:
+  init.sql: |
+    USE mcp_db;
+
+    CREATE TABLE IF NOT EXISTS clients (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        first_name VARCHAR(50) NOT NULL,
+        last_name VARCHAR(50) NOT NULL,
+        email VARCHAR(100) NOT NULL UNIQUE,
+        passport VARCHAR(20) NOT NULL UNIQUE,
+        date_of_birth DATE NOT NULL,
+        phone VARCHAR(20),
+        address VARCHAR(200),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS accounts (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        client_id INT NOT NULL,
+        account_number VARCHAR(20) NOT NULL UNIQUE,
+        account_type ENUM('checking', 'savings') NOT NULL,
+        balance DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+        currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+        opened_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (client_id) REFERENCES clients(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS transactions (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        account_id INT NOT NULL,
+        transaction_type ENUM('deposit', 'withdrawal', 'transfer') NOT NULL,
+        amount DECIMAL(12,2) NOT NULL,
+        description VARCHAR(200),
+        transaction_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (account_id) REFERENCES accounts(id)
+    );
+
+    INSERT INTO clients (first_name, last_name, email, passport, date_of_birth, phone, address) VALUES
+    ('Elena', 'Martinez', 'elena.martinez@email.com', 'US-8834721', '1988-03-15', '+1-555-0142', '742 Oak Avenue, Austin, TX 78701'),
+    ('James', 'Nakamura', 'james.nakamura@email.com', 'US-6621984', '1975-11-22', '+1-555-0278', '1501 Pine Street, Seattle, WA 98101'),
+    ('Priya', 'Sharma', 'priya.sharma@email.com', 'US-7745302', '1992-07-08', '+1-555-0391', '320 Maple Drive, Chicago, IL 60601'),
+    ('Marcus', 'Okonkwo', 'marcus.okonkwo@email.com', 'US-5518467', '1984-01-30', '+1-555-0463', '89 Elm Court, Denver, CO 80202'),
+    ('Sofia', 'Andersson', 'sofia.andersson@email.com', 'US-9903158', '1990-09-12', '+1-555-0517', '2200 Cedar Lane, Portland, OR 97201');
+
+    INSERT INTO accounts (client_id, account_number, account_type, balance) VALUES
+    (1, 'CHK-10042381', 'checking', 4250.75),
+    (1, 'SAV-10042382', 'savings', 18500.00),
+    (2, 'CHK-10078564', 'checking', 12830.40),
+    (2, 'SAV-10078565', 'savings', 95200.00),
+    (3, 'CHK-10091203', 'checking', 1875.20),
+    (3, 'SAV-10091204', 'savings', 7400.00),
+    (4, 'CHK-10055789', 'checking', 31450.90),
+    (4, 'SAV-10055790', 'savings', 142000.00),
+    (5, 'CHK-10063412', 'checking', 6320.15),
+    (5, 'SAV-10063413', 'savings', 23750.00);
+
+    INSERT INTO transactions (account_id, transaction_type, amount, description, transaction_date) VALUES
+    (1, 'deposit', 3500.00, 'Payroll deposit', '2026-07-01 09:00:00'),
+    (1, 'withdrawal', 120.50, 'Grocery store', '2026-07-05 14:32:00'),
+    (2, 'deposit', 500.00, 'Monthly savings transfer', '2026-07-01 09:05:00'),
+    (3, 'deposit', 8200.00, 'Payroll deposit', '2026-07-01 09:00:00'),
+    (3, 'withdrawal', 2400.00, 'Rent payment', '2026-07-03 08:00:00'),
+    (4, 'deposit', 1200.00, 'Investment return', '2026-07-10 11:00:00'),
+    (5, 'deposit', 1500.00, 'Freelance payment', '2026-07-07 16:45:00'),
+    (5, 'withdrawal', 89.99, 'Online subscription', '2026-07-12 10:20:00'),
+    (6, 'deposit', 200.00, 'Savings transfer', '2026-07-15 09:00:00'),
+    (7, 'deposit', 15000.00, 'Payroll deposit', '2026-07-01 09:00:00'),
+    (7, 'withdrawal', 1850.00, 'Mortgage payment', '2026-07-05 08:00:00'),
+    (8, 'deposit', 5000.00, 'Bonus deposit', '2026-07-20 12:00:00'),
+    (9, 'deposit', 2800.00, 'Payroll deposit', '2026-07-01 09:00:00'),
+    (9, 'withdrawal', 450.00, 'Utility bills', '2026-07-08 09:30:00'),
+    (10, 'deposit', 750.00, 'Interest payment', '2026-07-25 08:00:00');
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mariadb
+  namespace: llamastack
+  labels:
+    app: mariadb
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mariadb
+  namespace: llamastack
+  labels:
+    app: mariadb
+    app.kubernetes.io/part-of: llamastack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mariadb
+  template:
+    metadata:
+      labels:
+        app: mariadb
+    spec:
+      containers:
+        - name: mariadb
+          image: registry.redhat.io/rhel9/mariadb-1011
+          ports:
+            - containerPort: 3306
+              protocol: TCP
+          envFrom:
+            - secretRef:
+                name: mariadb
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql/data
+            - name: init-sql
+              mountPath: /var/lib/mysql/init
+              readOnly: true
+          resources:
+            limits:
+              cpu: "1"
+              memory: 1Gi
+            requests:
+              cpu: 250m
+              memory: 256Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mariadb
+        - name: init-sql
+          configMap:
+            name: mariadb-init
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mariadb
+  namespace: llamastack
+  labels:
+    app: mariadb
+spec:
+  selector:
+    app: mariadb
+  ports:
+    - name: mariadb
+      port: 3306
+      targetPort: 3306
+      protocol: TCP
+---
+# Secret for the MariaDB MCP server to connect to the database above.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mariadb-credentials
+  namespace: llamastack
+  labels:
+    app: mcp-server
+    mcp-server: mariadbmcp
+type: Opaque
+stringData:
+  db-user: mcp_user
+  db-password: mcp_pass

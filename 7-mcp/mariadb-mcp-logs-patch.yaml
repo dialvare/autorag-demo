@@ -1,0 +1,17 @@
+# Patch: adds a writable /app/logs volume to the MariaDB MCP deployment.
+# The MCP Lifecycle Operator sets readOnlyRootFilesystem, so the Python
+# logging handler needs a writable mount for its log file.
+# Apply after mariadb-mcp.yaml once the operator creates the deployment:
+#   oc patch deployment mariadbmcp -n llamastack --type=strategic \
+#     --patch-file=7-mcp/mariadb-mcp-logs-patch.yaml
+spec:
+  template:
+    spec:
+      volumes:
+        - name: logs
+          emptyDir: {}
+      containers:
+        - name: mcp-server
+          volumeMounts:
+            - name: logs
+              mountPath: /app/logs

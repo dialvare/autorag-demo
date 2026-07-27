@@ -1,0 +1,10 @@
+# Merge patch: adds MCP_SERVER_URL without replacing other env vars.
+# Apply after mariadb.yaml and once the MariaDB MCP server is running in llamastack:
+#   oc patch llamastackdistribution llamastack-custom-distribution \
+#     -n llamastack --type=merge --patch-file=llamastack-mariadb-connection.yaml
+spec:
+  server:
+    containerSpec:
+      env:
+        - name: MCP_SERVER_URL
+          value: 'http://mariadbmcp.llamastack.svc.cluster.local:9001/mcp'
