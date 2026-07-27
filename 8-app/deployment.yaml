@@ -12,10 +12,16 @@ data:
   INFERENCE_MODEL: vllm-inference/redhataiqwen3-8b-fp8-dynamic
   LLAMA_STACK_HOST: llamastack-custom-distribution-service
   LLAMA_STACK_PORT: "8321"
-  VECTOR_STORE_ID: pizza-bank-best-pattern
+  # Optional preferred AutoRAG vs_* id after the workshop run. Leave empty to
+  # pick the first listed store in the UI. Embedding model comes from that
+  # store's metadata (workshop-variable), not from llm-secret.
+  VECTOR_STORE_ID: ""
   LLAMA_STACK_RAG_MAX_RESULTS: "5"
   LLAMA_STACK_RAG_RANKER: weighted
   LLAMA_STACK_RAG_RANKER_ALPHA: "0.5"
+  # Used by the AutoRAG Milvus bridge when the VS has 0 OpenAI-indexed files.
+  MILVUS_HOST: milvus-service.llamastack.svc.cluster.local
+  MILVUS_PORT: "19530"
 ---
 apiVersion: apps/v1
 kind: Deployment

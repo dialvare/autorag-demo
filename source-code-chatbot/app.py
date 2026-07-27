@@ -17,12 +17,15 @@ API_KEY = (
     or os.getenv("LLAMA_STACK_API_KEY", "").strip()
 )
 DEFAULT_MODEL = os.getenv("INFERENCE_MODEL", "redhataiqwen3-8b-fp8-dynamic")
-DEFAULT_VECTOR_STORE = os.getenv("VECTOR_STORE_ID", "pizza-bank-best-pattern")
+# Optional preferred AutoRAG vs_* id; leave empty so the UI picks the first listed store.
+DEFAULT_VECTOR_STORE = os.getenv("VECTOR_STORE_ID", "").strip()
 MCP_SERVER_LABEL = os.getenv("MCP_SERVER_LABEL", "openshift-mcp-server")
 MCP_SERVER_URL = os.getenv(
     "MCP_SERVER_URL",
     "http://openshift-mcp-deployment.llamastack.svc.cluster.local:8080/mcp",
 )
+MILVUS_HOST = os.getenv("MILVUS_HOST", "milvus-service.llamastack.svc.cluster.local")
+MILVUS_PORT = int(os.getenv("MILVUS_PORT", "19530"))
 REQUEST_TIMEOUT = int(os.getenv("LLAMA_STACK_REQUEST_TIMEOUT", "30"))
 TURN_TIMEOUT = int(os.getenv("LLAMA_STACK_TURN_TIMEOUT", "300"))
 MAX_OUTPUT_TOKENS = int(os.getenv("LLAMA_STACK_MAX_OUTPUT_TOKENS", "2048"))
@@ -31,7 +34,7 @@ MAX_OUTPUT_TOKENS = int(os.getenv("LLAMA_STACK_MAX_OUTPUT_TOKENS", "2048"))
 MCP_MAX_OUTPUT_TOKENS = int(os.getenv("LLAMA_STACK_MCP_MAX_OUTPUT_TOKENS", "1024"))
 MAX_RESPONSE_CONTINUATIONS = int(os.getenv("LLAMA_STACK_MAX_RESPONSE_CONTINUATIONS", "2"))
 RAG_MAX_RESULTS = int(os.getenv("LLAMA_STACK_RAG_MAX_RESULTS", "5"))
-# AutoRAG best-pattern retrieval defaults (hybrid + weighted alpha 0.5)
+# Used only for the OpenAI file_search path (stores with indexed files).
 RAG_RANKER = os.getenv("LLAMA_STACK_RAG_RANKER", "weighted").strip()
 RAG_RANKER_ALPHA = float(os.getenv("LLAMA_STACK_RAG_RANKER_ALPHA", "0.5"))
 # Restrict MCP schemas so prompt+answer fit; override with comma-separated names.
@@ -45,8 +48,8 @@ MCP_ALLOWED_TOOLS = [
 ]
 RAG_INSTRUCTIONS = (
     "Answer Pizza Bank product and policy questions using only information found in "
-    "file_search results. Cite the retrieved documents. If file_search returns no "
-    "relevant chunks, say the knowledge base has no matching information."
+    "the retrieved context. Cite the retrieved documents. If the retrieved context "
+    "has no relevant chunks, say the knowledge base has no matching information."
 )
 MCP_INSTRUCTIONS = (
     "For OpenShift/Kubernetes questions, call the matching MCP tool immediately "
@@ -58,11 +61,11 @@ MCP_INSTRUCTIONS = (
     "Error pods (skip long Completed job pods unless asked)."
 )
 COMBINED_TOOL_INSTRUCTIONS = (
-    "Choose the right tool for each question. Use file_search only for Pizza Bank "
-    "products, accounts, cards, fees, and policies. Use OpenShift MCP tools for "
-    "Kubernetes or cluster infrastructure questions (nodes, pods, events, cluster "
-    "status). Never answer infrastructure questions from file_search or claim the "
-    "knowledge base lacks node or cluster data—call MCP tools instead."
+    "Choose the right tool for each question. Use retrieved knowledge-base context "
+    "only for Pizza Bank products, accounts, cards, fees, and policies. Use OpenShift "
+    "MCP tools for Kubernetes or cluster infrastructure questions (nodes, pods, events, "
+    "cluster status). Never answer infrastructure questions from the knowledge base "
+    "or claim it lacks node or cluster data—call MCP tools instead."
 )
 BASE_INSTRUCTIONS = (
     "You are a corporate assistant for Pizza Bank. Reply directly to the user in "
@@ -72,7 +75,7 @@ BASE_INSTRUCTIONS = (
 )
 
 
-def _build_instructions(*, enable_rag, enable_mcp):
+def _build_instructions(*, enable_rag, enable_mcp, retrieved_context=None):
     parts = [BASE_INSTRUCTIONS]
     if enable_rag and enable_mcp:
         parts.append(COMBINED_TOOL_INSTRUCTIONS)
@@ -81,7 +84,15 @@ def _build_instructions(*, enable_rag, enable_mcp):
         parts.append(RAG_INSTRUCTIONS)
     elif enable_mcp:
         parts.append(MCP_INSTRUCTIONS)
+    if retrieved_context:
+        parts.append(
+            "Retrieved knowledge-base context:\n"
+            f"{retrieved_context}\n"
+            "Use only this context for Pizza Bank product/policy answers."
+        )
     return " ".join(parts)
+
+
 _THINKING_BLOCK_RE = re.compile(
     r"<(?:think|redacted_thinking)>.*?</(?:think|redacted_thinking)>",
     re.DOTALL | re.IGNORECASE,
@@ -155,6 +166,96 @@ def _default_index(items, preferred):
     return 0
 
 
+def _store_embedding_model(store):
+    if not store:
+        return None
+    metadata = store.get("metadata") or {}
+    return (metadata.get("embedding_model") or "").strip() or None
+
+
+def _store_file_count(store):
+    if not store:
+        return 0
+    counts = store.get("file_counts") or {}
+    return int(counts.get("completed") or counts.get("total") or store.get("completed_files") or 0)
+
+
+def _milvus_collection_name(vs_id):
+    return vs_id.replace("-", "_")
+
+
+def _embed_query(model, text):
+    res = _ls_request(
+        "POST",
+        "/embeddings",
+        json={"model": model, "input": text},
+        timeout=REQUEST_TIMEOUT,
+    )
+    res.raise_for_status()
+    data = res.json().get("data") or []
+    if not data or not data[0].get("embedding"):
+        raise RuntimeError(f"No embedding returned for model {model}")
+    return data[0]["embedding"]
+
+
+def _milvus_search(collection, vector, top_k):
+    from pymilvus import Collection, connections, utility
+
+    alias = "chatbot"
+    if not connections.has_connection(alias):
+        connections.connect(alias=alias, host=MILVUS_HOST, port=str(MILVUS_PORT))
+    if not utility.has_collection(collection, using=alias):
+        raise RuntimeError(
+            f"Milvus collection `{collection}` not found on {MILVUS_HOST}:{MILVUS_PORT}"
+        )
+    col = Collection(collection, using=alias)
+    col.load()
+    hits = col.search(
+        data=[vector],
+        anns_field="vector",
+        param={"metric_type": "COSINE", "params": {"nprobe": 16}},
+        limit=top_k,
+        output_fields=["chunk_id", "content"],
+    )
+    results = []
+    for hit_group in hits:
+        for hit in hit_group:
+            content = hit.entity.get("content") or ""
+            if isinstance(content, str) and content.strip():
+                results.append(
+                    {
+                        "chunk_id": hit.entity.get("chunk_id"),
+                        "content": content.strip(),
+                        "score": float(hit.score),
+                    }
+                )
+    return results
+
+
+def _retrieve_rag_context(vs_id, query, store):
+    """Embed with the store's model and search AutoRAG Milvus chunks."""
+    embedding_model = _store_embedding_model(store)
+    if not embedding_model:
+        raise RuntimeError(
+            f"Vector store `{vs_id}` has no metadata.embedding_model; "
+            "cannot retrieve AutoRAG chunks."
+        )
+    vector = _embed_query(embedding_model, query)
+    collection = _milvus_collection_name(vs_id)
+    chunks = _milvus_search(collection, vector, RAG_MAX_RESULTS)
+    return {
+        "embedding_model": embedding_model,
+        "collection": collection,
+        "chunks": chunks,
+        "context_text": "\n\n---\n\n".join(c["content"] for c in chunks),
+    }
+
+
+def _uses_file_search(store):
+    """OpenAI file_search only works when Llama Stack has indexed files."""
+    return _store_file_count(store) > 0
+
+
 @st.cache_data(ttl=60)
 def get_models():
     try:
@@ -176,14 +277,18 @@ def get_models():
 
 @st.cache_data(ttl=60)
 def get_vector_stores():
-    fallback = [
-        {
-            "id": DEFAULT_VECTOR_STORE,
-            "name": DEFAULT_VECTOR_STORE,
-            "label": DEFAULT_VECTOR_STORE,
-            "completed_files": 0,
-        }
-    ]
+    fallback = []
+    if DEFAULT_VECTOR_STORE:
+        fallback = [
+            {
+                "id": DEFAULT_VECTOR_STORE,
+                "name": DEFAULT_VECTOR_STORE,
+                "label": DEFAULT_VECTOR_STORE,
+                "completed_files": 0,
+                "metadata": {},
+                "file_counts": {"completed": 0, "total": 0},
+            }
+        ]
     try:
         res = _ls_request("GET", "/vector_stores")
         res.raise_for_status()
@@ -193,18 +298,24 @@ def get_vector_stores():
             if not store_id:
                 continue
             name = (item.get("name") or "").strip()
-            completed_files = (item.get("file_counts") or {}).get("completed", 0)
+            metadata = item.get("metadata") or {}
+            file_counts = item.get("file_counts") or {}
+            completed_files = int(file_counts.get("completed") or 0)
+            embedding_model = (metadata.get("embedding_model") or "").strip()
+            emb_short = embedding_model.split("/")[-1] if embedding_model else "unknown-emb"
             base = f"{name} ({store_id})" if name else store_id
-            label = f"{base} · {completed_files} files"
+            label = f"{base} · {emb_short} · {completed_files} files"
             stores.append(
                 {
                     "id": store_id,
                     "name": name or store_id,
                     "label": label,
                     "completed_files": completed_files,
+                    "metadata": metadata,
+                    "file_counts": file_counts,
                 }
             )
-        # Prefer indexed stores at the top of the dropdown.
+        # Prefer stores with indexed files, then by name/id.
         stores.sort(key=lambda s: (-s["completed_files"], s["name"], s["id"]))
         if stores:
             return stores, None
@@ -214,9 +325,12 @@ def get_vector_stores():
 
 
 def _pick_default_vector_store(stores):
-    for store in stores:
-        if store["id"] == DEFAULT_VECTOR_STORE or store["name"] == DEFAULT_VECTOR_STORE:
-            return store["id"]
+    if not stores:
+        return None
+    if DEFAULT_VECTOR_STORE:
+        for store in stores:
+            if store["id"] == DEFAULT_VECTOR_STORE or store["name"] == DEFAULT_VECTOR_STORE:
+                return store["id"]
     for store in stores:
         if store["completed_files"] > 0:
             return store["id"]
@@ -238,10 +352,13 @@ def get_builtin_tools():
         return ["builtin::websearch"], _request_error_detail(exc)
 
 
-def _build_response_tools(*, enable_rag, selected_vstore, enable_websearch, enable_mcp):
+def _build_response_tools(
+    *, enable_rag, selected_vstore, selected_store, enable_websearch, enable_mcp
+):
     tools = []
 
-    if enable_rag and selected_vstore:
+    # file_search only when LS has OpenAI-indexed files; AutoRAG stores use Milvus bridge.
+    if enable_rag and selected_vstore and _uses_file_search(selected_store):
         file_search = {
             "type": "file_search",
             "vector_store_ids": [selected_vstore],
@@ -426,23 +543,22 @@ with st.sidebar:
     st.divider()
 
     st.subheader("📚 Knowledge Bases (RAG)")
+    vstores, vstores_error = get_vector_stores()
     enable_rag = st.toggle(
         "Enable Vector Search",
-        value=bool(DEFAULT_VECTOR_STORE),
+        value=bool(vstores) or bool(DEFAULT_VECTOR_STORE),
     )
-    vstores, vstores_error = get_vector_stores()
     if vstores_error:
-        st.warning(
-            f"Could not list vector stores. Using `{DEFAULT_VECTOR_STORE}`."
-        )
+        st.warning("Could not list vector stores.")
         st.caption(vstores_error)
     store_labels = [store["label"] for store in vstores]
-    default_store_id = _pick_default_vector_store(vstores)
-    default_store_label = next(
-        store["label"] for store in vstores if store["id"] == default_store_id
-    )
     selected_vstore = None
-    if enable_rag:
+    selected_store = None
+    if enable_rag and vstores:
+        default_store_id = _pick_default_vector_store(vstores)
+        default_store_label = next(
+            store["label"] for store in vstores if store["id"] == default_store_id
+        )
         selected_label = st.selectbox(
             "Select Vector Store",
             store_labels,
@@ -452,16 +568,18 @@ with st.sidebar:
             store for store in vstores if store["label"] == selected_label
         )
         selected_vstore = selected_store["id"]
-        st.caption(
-            f"Milvus ID: `{selected_vstore}` · "
-            f"indexed files: {selected_store['completed_files']}"
-        )
-        if selected_store["completed_files"] < 1:
-            st.error(
-                "This vector store has **0 indexed files**, so file_search will find "
-                "nothing. Pick `pizza-bank-best-pattern` (or any store with files > 0), "
-                "then click **Apply Changes and Restart Chat**."
+        emb = _store_embedding_model(selected_store)
+        if emb:
+            st.caption(f"Embedding (from store metadata): `{emb}`")
+        if _uses_file_search(selected_store):
+            st.caption("Retrieval: Llama Stack `file_search`")
+        else:
+            st.caption(
+                "Retrieval: AutoRAG Milvus bridge "
+                f"(`{_milvus_collection_name(selected_vstore)}`)"
             )
+    elif enable_rag:
+        st.warning("No vector stores available. Run AutoRAG first.")
 
     st.divider()
 
@@ -492,6 +610,13 @@ st.title("🦙 Intelligent Assistant (Llama Stack)")
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
+        if msg.get("rag_chunks"):
+            with st.expander("Retrieved context", expanded=False):
+                st.caption(msg.get("rag_meta", ""))
+                for chunk in msg["rag_chunks"]:
+                    st.markdown(
+                        f"**score={chunk['score']:.3f}**\n\n{chunk['content']}"
+                    )
 
 if prompt := st.chat_input("Type your question here..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
@@ -502,9 +627,33 @@ if prompt := st.chat_input("Type your question here..."):
         message_placeholder = st.empty()
         with st.spinner("Querying the AI and its tools..."):
             try:
+                use_file_search = enable_rag and selected_vstore and _uses_file_search(
+                    selected_store
+                )
+                use_milvus_bridge = (
+                    enable_rag
+                    and selected_vstore
+                    and selected_store
+                    and not use_file_search
+                )
+
+                retrieved = None
+                retrieved_context = None
+                if use_milvus_bridge:
+                    retrieved = _retrieve_rag_context(
+                        selected_vstore, prompt, selected_store
+                    )
+                    retrieved_context = retrieved.get("context_text") or None
+                    if not retrieved_context:
+                        retrieved_context = (
+                            "(No matching chunks were retrieved from the "
+                            "AutoRAG vector store.)"
+                        )
+
                 tools = _build_response_tools(
                     enable_rag=enable_rag,
                     selected_vstore=selected_vstore,
+                    selected_store=selected_store,
                     enable_websearch=enable_websearch,
                     enable_mcp=enable_mcp,
                 )
@@ -518,6 +667,7 @@ if prompt := st.chat_input("Type your question here..."):
                     "instructions": _build_instructions(
                         enable_rag=enable_rag,
                         enable_mcp=enable_mcp,
+                        retrieved_context=retrieved_context,
                     ),
                     "temperature": 0.2 if enable_mcp else temperature,
                     "max_output_tokens": max_output_tokens,
@@ -526,16 +676,31 @@ if prompt := st.chat_input("Type your question here..."):
                 }
                 if tools:
                     response_payload["tools"] = tools
-                if enable_rag and selected_vstore:
+                if use_file_search:
                     response_payload["include"] = ["file_search_call.results"]
                     if not enable_mcp:
                         response_payload["tool_choice"] = {"type": "file_search"}
 
                 bot_reply = _run_response_turn(response_payload)
                 message_placeholder.markdown(bot_reply)
-                st.session_state.messages.append(
-                    {"role": "assistant", "content": bot_reply}
-                )
+
+                assistant_msg = {"role": "assistant", "content": bot_reply}
+                if retrieved and retrieved.get("chunks"):
+                    assistant_msg["rag_chunks"] = retrieved["chunks"]
+                    assistant_msg["rag_meta"] = (
+                        f"embedding=`{retrieved['embedding_model']}` · "
+                        f"collection=`{retrieved['collection']}`"
+                    )
+                    with st.expander("Retrieved context", expanded=False):
+                        st.caption(assistant_msg["rag_meta"])
+                        for chunk in retrieved["chunks"]:
+                            st.markdown(
+                                f"**score={chunk['score']:.3f}**\n\n{chunk['content']}"
+                            )
+                st.session_state.messages.append(assistant_msg)
             except requests.RequestException as exc:
                 st.error("Network error querying Llama Stack:")
                 st.write(_request_error_detail(exc))
+            except Exception as exc:
+                st.error("RAG / retrieval error:")
+                st.write(str(exc))
