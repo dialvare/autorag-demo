@@ -49,16 +49,6 @@ spec:
             secretKeyRef:
               name: llm-secret
               key: VLLM_TLS_VERIFY
-        - name: VLLM_API_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: llm-secret
-              key: VLLM_API_TOKEN
-        - name: VLLM_MAX_TOKENS
-          valueFrom:
-            secretKeyRef:
-              name: llm-secret
-              key: VLLM_MAX_TOKENS
         # Remote embedding model (vLLM / OpenShift AI predictor)
         - name: EMBEDDING_MODEL
           valueFrom:
@@ -80,16 +70,6 @@ spec:
             secretKeyRef:
               name: llm-secret
               key: VLLM_EMBEDDING_TLS_VERIFY
-        - name: VLLM_EMBEDDING_API_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: llm-secret
-              key: VLLM_EMBEDDING_API_TOKEN
-        - name: VLLM_EMBEDDING_MAX_TOKENS
-          valueFrom:
-            secretKeyRef:
-              name: llm-secret
-              key: VLLM_EMBEDDING_MAX_TOKENS
         - name: MILVUS_ENDPOINT
           valueFrom:
             secretKeyRef:

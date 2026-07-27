@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: knowledge-connection
+  namespace: llamastack
+  labels:
+    opendatahub.io/dashboard: 'true'
+    opendatahub.io/managed: 'true'
+  annotations:
+    opendatahub.io/connection-type: s3
+    openshift.io/display-name: KnowledgeConnection
+type: Opaque
+stringData:
+  AWS_ACCESS_KEY_ID: minioadmin
+  AWS_SECRET_ACCESS_KEY: minioadmin123
+  AWS_S3_ENDPOINT: http://minio-api.minio.svc.cluster.local:9000
+  AWS_DEFAULT_REGION: us-east-1
+  AWS_S3_BUCKET: autorag-data
