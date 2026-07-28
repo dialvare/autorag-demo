@@ -22,8 +22,6 @@ metadata:
     app: mariadb
 data:
   init.sql: |
-    USE mcp_db;
-
     CREATE TABLE IF NOT EXISTS clients (
         id INT AUTO_INCREMENT PRIMARY KEY,
         first_name VARCHAR(50) NOT NULL,
@@ -137,9 +135,6 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/mysql/data
-            - name: init-sql
-              mountPath: /var/lib/mysql/init
-              readOnly: true
           resources:
             limits:
               cpu: "1"
@@ -151,9 +146,6 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: mariadb
-        - name: init-sql
-          configMap:
-            name: mariadb-init
 ---
 apiVersion: v1
 kind: Service
@@ -170,6 +162,60 @@ spec:
       port: 3306
       targetPort: 3306
       protocol: TCP
+---
+# Job: seeds the database after MariaDB is ready.
+# Waits for the service to accept connections, then runs init.sql.
+# Safe to re-run: uses CREATE TABLE IF NOT EXISTS and INSERT with no ON
+# DUPLICATE, so a fresh PVC gets seeded and an existing one is a no-op
+# (inserts fail silently on UNIQUE constraints).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mariadb-seed
+  namespace: llamastack
+  labels:
+    app: mariadb
+spec:
+  backoffLimit: 4
+  template:
+    metadata:
+      labels:
+        app: mariadb-seed
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: seed
+          image: registry.redhat.io/rhel9/mariadb-1011
+          command:
+            - bash
+            - -c
+            - |
+              until mysql -h mariadb -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e 'SELECT 1' &>/dev/null; do
+                echo "Waiting for MariaDB..."
+                sleep 2
+              done
+              mysql -h mariadb -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" < /init/init.sql
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mariadb-credentials
+                  key: db-user
+            - name: DB_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: mariadb-credentials
+                  key: db-password
+            - name: DB_NAME
+              value: mcp_db
+          volumeMounts:
+            - name: init-sql
+              mountPath: /init
+              readOnly: true
+      volumes:
+        - name: init-sql
+          configMap:
+            name: mariadb-init
 ---
 # Secret for the MariaDB MCP server to connect to the database above.
 apiVersion: v1
