@@ -379,7 +379,7 @@ def _build_response_tools(
         mcp_tool = {
             "type": "mcp",
             "server_label": MCP_SERVER_LABEL,
-            "server_description": "MariaDB MCP server for querying the Pizza Bank database",
+            "server_description": "MariaDB MCP server for querying the mcp_db database",
             "server_url": MCP_SERVER_URL,
             "require_approval": "never",
         }
