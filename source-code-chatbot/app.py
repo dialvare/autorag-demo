@@ -56,7 +56,7 @@ MCP_INSTRUCTIONS = (
     "For database questions, call the matching MCP tool immediately "
     "(e.g. list_tables to see tables, get_table_schema for column details, "
     "execute_sql for queries). Do not narrate your plan. For execute_sql, always "
-    "pass the database_name parameter. If a tool errors, retry once with simpler "
+    "pass the mcp_db as the database_name parameter. If a tool errors, retry once with simpler "
     "arguments. After tool results arrive, present the data clearly in a table or "
     "short summary."
 )
