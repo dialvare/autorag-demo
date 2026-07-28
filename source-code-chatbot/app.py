@@ -103,38 +103,7 @@ _INCOMPLETE_THINKING_RE = re.compile(
     re.DOTALL | re.IGNORECASE,
 )
 
-st.set_page_config(page_title="PizzaBank Agent", page_icon="🍕", layout="wide")
-
-st.markdown(
-    """
-    <style>
-    /* PizzaBank corporate palette */
-    :root {
-        --pizza-red: #b71c1c;
-        --pizza-gold: #f9a825;
-        --pizza-dark: #1a1a2e;
-    }
-    [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
-    }
-    [data-testid="stSidebar"] * {
-        color: #e0e0e0 !important;
-    }
-    [data-testid="stSidebar"] h1,
-    [data-testid="stSidebar"] h2,
-    [data-testid="stSidebar"] h3 {
-        color: #f9a825 !important;
-    }
-    .stChatMessage [data-testid="stMarkdownContainer"] {
-        font-size: 0.95rem;
-    }
-    header[data-testid="stHeader"] {
-        background: linear-gradient(90deg, #b71c1c, #d32f2f) !important;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+st.set_page_config(page_title="Llama Stack Agent", page_icon="🦙", layout="wide")
 
 
 def _headers():
@@ -278,7 +247,7 @@ def _milvus_search(
             )
             hits = col.hybrid_search(
                 [dense_req, sparse_req],
-                rerank=ranker,
+                ranker=ranker,
                 limit=top_k,
                 output_fields=output_fields,
             )
@@ -632,31 +601,31 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 
 with st.sidebar:
-    st.markdown("### 🍕 PizzaBank")
-    st.caption("Internal Agent · Powered by AI")
+    st.header("⚙️ Agent Configuration")
+    st.caption(f"Backend: `{SCHEME}://{HOST}:{PORT}`")
+    st.caption("API: OpenAI-compatible `/v1/responses`")
 
     models, models_error = get_models()
     if models_error:
         st.warning(f"Could not list models. Using `{DEFAULT_MODEL}`.")
         st.caption(models_error)
 
-    with st.expander("Advanced", expanded=False):
-        selected_model = st.selectbox(
-            "Model",
-            models,
-            index=_default_index(models, DEFAULT_MODEL),
-        )
-        selected_model = _resolve_model_id(selected_model, models)
-        temperature = st.slider(
-            "Temperature", min_value=0.0, max_value=1.0, value=0.7, step=0.1
-        )
+    selected_model = st.selectbox(
+        "🧠 Model",
+        models,
+        index=_default_index(models, DEFAULT_MODEL),
+    )
+    selected_model = _resolve_model_id(selected_model, models)
+    temperature = st.slider(
+        "🌡️ Temperature", min_value=0.0, max_value=1.0, value=0.7, step=0.1
+    )
 
     st.divider()
 
-    st.subheader("📚 Product Knowledge")
+    st.subheader("📚 Knowledge Bases (RAG)")
     vstores, vstores_error = get_vector_stores()
     enable_rag = st.toggle(
-        "Product catalog & policies",
+        "Enable Vector Search",
         value=bool(vstores) or bool(DEFAULT_VECTOR_STORE),
     )
     if vstores_error:
@@ -717,7 +686,7 @@ with st.sidebar:
 
     st.divider()
 
-    st.subheader("🔗 Integrations")
+    st.subheader("🛠️ Tools")
     builtin_tools, builtin_error = get_builtin_tools()
     if builtin_error:
         st.caption(f"Built-in tool discovery: {builtin_error}")
@@ -728,19 +697,18 @@ with st.sidebar:
         disabled="builtin::websearch" not in builtin_tools,
     )
 
-    enable_mcp = st.toggle("Client database", value=bool(MCP_SERVER_URL))
+    enable_mcp = st.toggle("Enable MariaDB MCP Server", value=bool(MCP_SERVER_URL))
     if enable_mcp:
-        st.caption("Connected to client records database")
+        st.caption(f"MCP endpoint: `{MCP_SERVER_URL}`")
 
     st.divider()
     if st.button(
-        "🔄 Restart Conversation", type="primary", use_container_width=True
+        "🔄 Apply Changes and Restart Chat", type="primary", use_container_width=True
     ):
         st.session_state.clear()
         st.rerun()
 
-st.title("🍕 PizzaBank Agent")
-st.caption("Your internal assistant for products, policies, and client data")
+st.title("🦙 Intelligent Assistant (Llama Stack)")
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
@@ -760,14 +728,14 @@ for msg in st.session_state.messages:
                         f"**score={chunk['score']:.3f}**\n\n{chunk['content']}"
                     )
 
-if prompt := st.chat_input("Ask about products, policies, or client data..."):
+if prompt := st.chat_input("Type your question here..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
-        with st.spinner("Processing your request..."):
+        with st.spinner("Querying the AI and its tools..."):
             try:
                 use_file_search = enable_rag and selected_vstore and _uses_file_search(
                     selected_store
@@ -853,8 +821,8 @@ if prompt := st.chat_input("Ask about products, policies, or client data..."):
                             )
                 st.session_state.messages.append(assistant_msg)
             except requests.RequestException as exc:
-                st.error("Connection error:")
+                st.error("Network error querying Llama Stack:")
                 st.write(_request_error_detail(exc))
             except Exception as exc:
-                st.error("Something went wrong:")
+                st.error("RAG / retrieval error:")
                 st.write(str(exc))
