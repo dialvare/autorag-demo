@@ -198,8 +198,14 @@ def _embed_query(model, text):
     return data[0]["embedding"]
 
 
-def _milvus_search(collection, vector, top_k):
-    from pymilvus import Collection, connections, utility
+def _milvus_search(
+    collection, vector, top_k, query_text="",
+    search_mode="vector", ranker_k=0, ranker_alpha=1.0,
+):
+    from pymilvus import (
+        AnnSearchRequest, Collection, DataType, RRFRanker, WeightedRanker,
+        connections, utility,
+    )
 
     alias = "chatbot"
     if not connections.has_connection(alias):
@@ -210,13 +216,62 @@ def _milvus_search(collection, vector, top_k):
         )
     col = Collection(collection, using=alias)
     col.load()
-    hits = col.search(
-        data=[vector],
-        anns_field="vector",
-        param={"metric_type": "COSINE", "params": {"nprobe": 16}},
-        limit=top_k,
-        output_fields=["chunk_id", "content"],
-    )
+
+    output_fields = ["chunk_id", "content"]
+    hybrid_warning = None
+
+    if search_mode == "hybrid":
+        sparse_field = None
+        for field in col.schema.fields:
+            if field.dtype == DataType.SPARSE_FLOAT_VECTOR:
+                sparse_field = field.name
+                break
+
+        if sparse_field and query_text:
+            dense_req = AnnSearchRequest(
+                data=[vector],
+                anns_field="vector",
+                param={"metric_type": "COSINE", "params": {"nprobe": 16}},
+                limit=top_k,
+            )
+            sparse_req = AnnSearchRequest(
+                data=[query_text],
+                anns_field=sparse_field,
+                param={"metric_type": "BM25"},
+                limit=top_k,
+            )
+            ranker = (
+                RRFRanker(k=ranker_k)
+                if ranker_k > 0
+                else WeightedRanker(ranker_alpha, 1 - ranker_alpha)
+            )
+            hits = col.hybrid_search(
+                [dense_req, sparse_req],
+                ranker=ranker,
+                limit=top_k,
+                output_fields=output_fields,
+            )
+        else:
+            hybrid_warning = (
+                "Collection lacks a sparse field for hybrid search. "
+                "Falling back to vector-only."
+            )
+            hits = col.search(
+                data=[vector],
+                anns_field="vector",
+                param={"metric_type": "COSINE", "params": {"nprobe": 16}},
+                limit=top_k,
+                output_fields=output_fields,
+            )
+    else:
+        hits = col.search(
+            data=[vector],
+            anns_field="vector",
+            param={"metric_type": "COSINE", "params": {"nprobe": 16}},
+            limit=top_k,
+            output_fields=output_fields,
+        )
+
     results = []
     for hit_group in hits:
         for hit in hit_group:
@@ -229,10 +284,13 @@ def _milvus_search(collection, vector, top_k):
                         "score": float(hit.score),
                     }
                 )
-    return results
+    return results, hybrid_warning
 
 
-def _retrieve_rag_context(vs_id, query, store, num_chunks=RAG_MAX_RESULTS):
+def _retrieve_rag_context(
+    vs_id, query, store, num_chunks=RAG_MAX_RESULTS,
+    search_mode="vector", ranker_k=0, ranker_alpha=1.0,
+):
     """Embed with the store's model and search AutoRAG Milvus chunks."""
     embedding_model = _store_embedding_model(store)
     if not embedding_model:
@@ -242,12 +300,16 @@ def _retrieve_rag_context(vs_id, query, store, num_chunks=RAG_MAX_RESULTS):
         )
     vector = _embed_query(embedding_model, query)
     collection = _milvus_collection_name(vs_id)
-    chunks = _milvus_search(collection, vector, num_chunks)
+    chunks, hybrid_warning = _milvus_search(
+        collection, vector, num_chunks, query_text=query,
+        search_mode=search_mode, ranker_k=ranker_k, ranker_alpha=ranker_alpha,
+    )
     return {
         "embedding_model": embedding_model,
         "collection": collection,
         "chunks": chunks,
         "context_text": "\n\n---\n\n".join(c["content"] for c in chunks),
+        "hybrid_warning": hybrid_warning,
     }
 
 
@@ -599,11 +661,28 @@ with st.sidebar:
         rag_num_chunks = st.slider(
             "Number of chunks", min_value=1, max_value=10, value=RAG_MAX_RESULTS, step=1
         )
+        rag_search_mode = st.selectbox(
+            "Search mode", ["vector", "hybrid"], index=0
+        )
+        rag_ranker_k = st.slider(
+            "Ranker K (RRF)", min_value=0, max_value=100, value=0, step=1,
+            help="If > 0, uses RRF ranker with this K. If 0, uses weighted ranker with alpha.",
+        )
+        rag_ranker_alpha = st.slider(
+            "Ranker Alpha", min_value=0.0, max_value=1.0, value=1.0, step=0.1,
+            help="1.0 = all vector, 0.0 = all keyword. Used when Ranker K is 0.",
+        )
     elif enable_rag:
         rag_num_chunks = RAG_MAX_RESULTS
+        rag_search_mode = "vector"
+        rag_ranker_k = 0
+        rag_ranker_alpha = 1.0
         st.warning("No vector stores available. Run AutoRAG first.")
     else:
         rag_num_chunks = RAG_MAX_RESULTS
+        rag_search_mode = "vector"
+        rag_ranker_k = 0
+        rag_ranker_alpha = 1.0
 
     st.divider()
 
@@ -672,7 +751,10 @@ if prompt := st.chat_input("Type your question here..."):
                 retrieved_context = None
                 if use_milvus_bridge:
                     retrieved = _retrieve_rag_context(
-                        selected_vstore, prompt, selected_store, rag_num_chunks
+                        selected_vstore, prompt, selected_store, rag_num_chunks,
+                        search_mode=rag_search_mode,
+                        ranker_k=rag_ranker_k,
+                        ranker_alpha=rag_ranker_alpha,
                     )
                     retrieved_context = retrieved.get("context_text") or None
                     if not retrieved_context:
