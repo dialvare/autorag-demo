@@ -22,7 +22,7 @@ DEFAULT_VECTOR_STORE = os.getenv("VECTOR_STORE_ID", "").strip()
 MCP_SERVER_LABEL = os.getenv("MCP_SERVER_LABEL", "openshift-mcp-server")
 MCP_SERVER_URL = os.getenv(
     "MCP_SERVER_URL",
-    "http://openshift-mcp-deployment.llamastack.svc.cluster.local:8080/mcp",
+    "http://mariadbmcp.llamastack.svc.cluster.local:9001/mcp",
 )
 MILVUS_HOST = os.getenv("MILVUS_HOST", "milvus-service.llamastack.svc.cluster.local")
 MILVUS_PORT = int(os.getenv("MILVUS_PORT", "19530"))
@@ -47,9 +47,10 @@ MCP_ALLOWED_TOOLS = [
     if t.strip()
 ]
 RAG_INSTRUCTIONS = (
-    "Answer Pizza Bank product and policy questions using only information found in "
-    "the retrieved context. Cite the retrieved documents. If the retrieved context "
-    "has no relevant chunks, say the knowledge base has no matching information."
+    "Please answer the question based solely on the information provided in the "
+    "Context section. If the question is unanswerable from the context, please say "
+    "you cannot answer. Respond exclusively in the language of the question, "
+    "regardless of any other language used in the provided context."
 )
 MCP_INSTRUCTIONS = (
     "For OpenShift/Kubernetes questions, call the matching MCP tool immediately "
@@ -86,9 +87,9 @@ def _build_instructions(*, enable_rag, enable_mcp, retrieved_context=None):
         parts.append(MCP_INSTRUCTIONS)
     if retrieved_context:
         parts.append(
-            "Retrieved knowledge-base context:\n"
-            f"{retrieved_context}\n"
-            "Use only this context for Pizza Bank product/policy answers."
+            f"\n\nContext:\n{retrieved_context}\n\n"
+            "Again, please answer the question based on the context provided only. "
+            "If the context is not related to the question, just say you cannot answer."
         )
     return " ".join(parts)
 
@@ -232,7 +233,7 @@ def _milvus_search(collection, vector, top_k):
     return results
 
 
-def _retrieve_rag_context(vs_id, query, store):
+def _retrieve_rag_context(vs_id, query, store, num_chunks=RAG_MAX_RESULTS):
     """Embed with the store's model and search AutoRAG Milvus chunks."""
     embedding_model = _store_embedding_model(store)
     if not embedding_model:
@@ -242,7 +243,7 @@ def _retrieve_rag_context(vs_id, query, store):
         )
     vector = _embed_query(embedding_model, query)
     collection = _milvus_collection_name(vs_id)
-    chunks = _milvus_search(collection, vector, RAG_MAX_RESULTS)
+    chunks = _milvus_search(collection, vector, num_chunks)
     return {
         "embedding_model": embedding_model,
         "collection": collection,
@@ -353,7 +354,8 @@ def get_builtin_tools():
 
 
 def _build_response_tools(
-    *, enable_rag, selected_vstore, selected_store, enable_websearch, enable_mcp
+    *, enable_rag, selected_vstore, selected_store, enable_websearch, enable_mcp,
+    num_chunks=RAG_MAX_RESULTS,
 ):
     tools = []
 
@@ -362,7 +364,7 @@ def _build_response_tools(
         file_search = {
             "type": "file_search",
             "vector_store_ids": [selected_vstore],
-            "max_num_results": RAG_MAX_RESULTS,
+            "max_num_results": num_chunks,
         }
         if RAG_RANKER:
             file_search["ranking_options"] = {
@@ -578,8 +580,14 @@ with st.sidebar:
                 "Retrieval: AutoRAG Milvus bridge "
                 f"(`{_milvus_collection_name(selected_vstore)}`)"
             )
+        rag_num_chunks = st.slider(
+            "Number of chunks", min_value=1, max_value=10, value=RAG_MAX_RESULTS, step=1
+        )
     elif enable_rag:
+        rag_num_chunks = RAG_MAX_RESULTS
         st.warning("No vector stores available. Run AutoRAG first.")
+    else:
+        rag_num_chunks = RAG_MAX_RESULTS
 
     st.divider()
 
@@ -641,7 +649,7 @@ if prompt := st.chat_input("Type your question here..."):
                 retrieved_context = None
                 if use_milvus_bridge:
                     retrieved = _retrieve_rag_context(
-                        selected_vstore, prompt, selected_store
+                        selected_vstore, prompt, selected_store, rag_num_chunks
                     )
                     retrieved_context = retrieved.get("context_text") or None
                     if not retrieved_context:
@@ -656,6 +664,7 @@ if prompt := st.chat_input("Type your question here..."):
                     selected_store=selected_store,
                     enable_websearch=enable_websearch,
                     enable_mcp=enable_mcp,
+                    num_chunks=rag_num_chunks,
                 )
                 max_output_tokens = (
                     MCP_MAX_OUTPUT_TOKENS if enable_mcp else MAX_OUTPUT_TOKENS
