@@ -470,9 +470,26 @@ def _extract_response_text(data):
     )
 
 
+def _extract_mcp_calls(data):
+    calls = []
+    for item in data.get("output", []):
+        if item.get("type") != "mcp_call":
+            continue
+        call = {"name": item.get("name", "unknown_tool")}
+        if item.get("error"):
+            call["status"] = "error"
+            call["output"] = item["error"]
+        else:
+            call["status"] = "ok"
+            call["output"] = item.get("output", "")
+        calls.append(call)
+    return calls
+
+
 def _run_response_turn(payload):
     response_data = None
     message_parts = []
+    mcp_calls = []
 
     for _ in range(MAX_RESPONSE_CONTINUATIONS + 1):
         response_res = _ls_request(
@@ -483,6 +500,8 @@ def _run_response_turn(payload):
         )
         response_res.raise_for_status()
         response_data = response_res.json()
+
+        mcp_calls.extend(_extract_mcp_calls(response_data))
 
         message_text = _extract_message_text(response_data)
         if message_text:
@@ -512,10 +531,8 @@ def _run_response_turn(payload):
             "stream": False,
         }
 
-    if message_parts:
-        return "\n\n".join(message_parts)
-
-    return _extract_response_text(response_data)
+    text = "\n\n".join(message_parts) if message_parts else _extract_response_text(response_data)
+    return text, mcp_calls
 
 
 if "messages" not in st.session_state:
@@ -617,6 +634,13 @@ st.title("🦙 Intelligent Assistant (Llama Stack)")
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
+        if msg.get("mcp_calls"):
+            with st.expander("MCP tools used", expanded=False):
+                for call in msg["mcp_calls"]:
+                    icon = "✅" if call["status"] == "ok" else "❌"
+                    st.markdown(f"{icon} **{call['name']}**")
+                    if call["output"]:
+                        st.code(call["output"], language="text")
         if msg.get("rag_chunks"):
             with st.expander("Retrieved context", expanded=False):
                 st.caption(msg.get("rag_meta", ""))
@@ -689,10 +713,18 @@ if prompt := st.chat_input("Type your question here..."):
                     if not enable_mcp:
                         response_payload["tool_choice"] = {"type": "file_search"}
 
-                bot_reply = _run_response_turn(response_payload)
+                bot_reply, mcp_calls = _run_response_turn(response_payload)
                 message_placeholder.markdown(bot_reply)
 
                 assistant_msg = {"role": "assistant", "content": bot_reply}
+                if mcp_calls:
+                    assistant_msg["mcp_calls"] = mcp_calls
+                    with st.expander("MCP tools used", expanded=False):
+                        for call in mcp_calls:
+                            icon = "✅" if call["status"] == "ok" else "❌"
+                            st.markdown(f"{icon} **{call['name']}**")
+                            if call["output"]:
+                                st.code(call["output"], language="text")
                 if retrieved and retrieved.get("chunks"):
                     assistant_msg["rag_chunks"] = retrieved["chunks"]
                     assistant_msg["rag_meta"] = (
