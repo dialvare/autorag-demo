@@ -19,7 +19,7 @@ API_KEY = (
 DEFAULT_MODEL = os.getenv("INFERENCE_MODEL", "redhataiqwen3-8b-fp8-dynamic")
 # Optional preferred AutoRAG vs_* id; leave empty so the UI picks the first listed store.
 DEFAULT_VECTOR_STORE = os.getenv("VECTOR_STORE_ID", "").strip()
-MCP_SERVER_LABEL = os.getenv("MCP_SERVER_LABEL", "openshift-mcp-server")
+MCP_SERVER_LABEL = os.getenv("MCP_SERVER_LABEL", "mariadb-mcp")
 MCP_SERVER_URL = os.getenv(
     "MCP_SERVER_URL",
     "http://mariadbmcp.llamastack.svc.cluster.local:9001/mcp",
@@ -42,7 +42,7 @@ MCP_ALLOWED_TOOLS = [
     t.strip()
     for t in os.getenv(
         "MCP_ALLOWED_TOOLS",
-        "pods_list_in_namespace,pods_get,pods_list,nodes_top,events_list,namespaces_list",
+        "list_databases,list_tables,get_table_schema,get_table_schema_with_relations,execute_sql,create_database",
     ).split(",")
     if t.strip()
 ]
@@ -53,20 +53,19 @@ RAG_INSTRUCTIONS = (
     "regardless of any other language used in the provided context."
 )
 MCP_INSTRUCTIONS = (
-    "For OpenShift/Kubernetes questions, call the matching MCP tool immediately "
-    "(e.g. pods_list_in_namespace for pods in a namespace, nodes_top for nodes). "
-    "Do not narrate your plan. For pods_list_in_namespace pass ONLY the namespace "
-    "unless the user asks to filter; never set fieldSelector to bare 'status.phase'. "
-    "If a tool errors, retry once with simpler arguments. After tool results arrive, "
-    "prefer a short summary: counts by phase, then list only Running/Pending/Failed/"
-    "Error pods (skip long Completed job pods unless asked)."
+    "For database questions, call the matching MCP tool immediately "
+    "(e.g. list_tables to see tables, get_table_schema for column details, "
+    "execute_sql for queries). Do not narrate your plan. For execute_sql, always "
+    "pass the database_name parameter. If a tool errors, retry once with simpler "
+    "arguments. After tool results arrive, present the data clearly in a table or "
+    "short summary."
 )
 COMBINED_TOOL_INSTRUCTIONS = (
     "Choose the right tool for each question. Use retrieved knowledge-base context "
-    "only for Pizza Bank products, accounts, cards, fees, and policies. Use OpenShift "
-    "MCP tools for Kubernetes or cluster infrastructure questions (nodes, pods, events, "
-    "cluster status). Never answer infrastructure questions from the knowledge base "
-    "or claim it lacks node or cluster data—call MCP tools instead."
+    "for Pizza Bank products, cards, fees, and policies. Use database MCP tools "
+    "for questions about client data, accounts, balances, or transactions "
+    "(e.g. execute_sql to look up a client by email). Never answer client-specific "
+    "questions from the knowledge base—call MCP tools instead."
 )
 BASE_INSTRUCTIONS = (
     "You are a corporate assistant for Pizza Bank. Reply directly to the user in "
@@ -380,7 +379,7 @@ def _build_response_tools(
         mcp_tool = {
             "type": "mcp",
             "server_label": MCP_SERVER_LABEL,
-            "server_description": "OpenShift MCP server deployed via the MCP catalog",
+            "server_description": "MariaDB MCP server for querying the Pizza Bank database",
             "server_url": MCP_SERVER_URL,
             "require_approval": "never",
         }
@@ -602,7 +601,7 @@ with st.sidebar:
         disabled="builtin::websearch" not in builtin_tools,
     )
 
-    enable_mcp = st.toggle("Enable OpenShift MCP Server", value=bool(MCP_SERVER_URL))
+    enable_mcp = st.toggle("Enable MariaDB MCP Server", value=bool(MCP_SERVER_URL))
     if enable_mcp:
         st.caption(f"MCP endpoint: `{MCP_SERVER_URL}`")
 
