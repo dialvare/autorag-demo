@@ -5,7 +5,7 @@
 # the volume into the generated Deployment instead of reverting it.
 # Apply after mariadb-mcp.yaml once the operator creates the MCPServer:
 #   oc patch mcpserver mariadbmcp -n llamastack --type=merge \
-#     --patch-file=7-mcp/mariadb-mcp-logs-patch.yaml
+#     --patch-file=6-mcp/mariadb-mcp-logs-patch.yaml
 spec:
   config:
     storage:

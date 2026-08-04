@@ -25,7 +25,7 @@ spec:
       - '9001'
     env:
       - name: DB_HOST
-        value: mariadb.llamastack.svc.cluster.local
+        value: mariadb.ogx.svc.cluster.local
       - name: DB_NAME
         value: mcp_db
       - name: ALLOWED_HOSTS

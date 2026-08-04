@@ -2,7 +2,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: dashboard-dspa-secret
-  namespace: llamastack
+  namespace: ogx
 type: Opaque
 stringData:
   AWS_ACCESS_KEY_ID: minioadmin
@@ -12,7 +12,7 @@ apiVersion: datasciencepipelinesapplications.opendatahub.io/v1
 kind: DataSciencePipelinesApplication
 metadata:
   name: dspa
-  namespace: llamastack
+  namespace: ogx
 spec:
   dspVersion: v2
   objectStorage:
@@ -41,6 +41,8 @@ spec:
     enableSamplePipeline: false
     enableOauth: true
     cacheEnabled: true
+    pipelineStore: kubernetes
+    managedPipelines: {}
   persistenceAgent:
     deploy: true
     numWorkers: 2

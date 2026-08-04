@@ -3,7 +3,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: mariadb
-  namespace: llamastack
+  namespace: ogx
   labels:
     app: mariadb
 type: Opaque
@@ -17,7 +17,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: mariadb-init
-  namespace: llamastack
+  namespace: ogx
   labels:
     app: mariadb
 data:
@@ -95,7 +95,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: mariadb
-  namespace: llamastack
+  namespace: ogx
   labels:
     app: mariadb
 spec:
@@ -109,10 +109,10 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mariadb
-  namespace: llamastack
+  namespace: ogx
   labels:
     app: mariadb
-    app.kubernetes.io/part-of: llamastack
+    app.kubernetes.io/part-of: ogx
 spec:
   replicas: 1
   selector:
@@ -151,7 +151,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: mariadb
-  namespace: llamastack
+  namespace: ogx
   labels:
     app: mariadb
 spec:
@@ -172,7 +172,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: mariadb-seed
-  namespace: llamastack
+  namespace: ogx
   labels:
     app: mariadb
 spec:
@@ -222,7 +222,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: mariadb-credentials
-  namespace: llamastack
+  namespace: ogx
   labels:
     app: mcp-server
     mcp-server: mariadbmcp

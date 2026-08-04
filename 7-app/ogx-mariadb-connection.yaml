@@ -1,0 +1,10 @@
+# Merge patch: adds MCP_SERVER_URL without replacing other env vars.
+# Apply after mariadb.yaml and once the MariaDB MCP server is running in ogx:
+#   oc patch ogxserver ogx-custom-server \
+#     -n ogx --type=merge --patch-file=ogx-mariadb-connection.yaml
+spec:
+  workload:
+    overrides:
+      env:
+        - name: MCP_SERVER_URL
+          value: 'http://mariadbmcp.ogx.svc.cluster.local:9001/mcp'

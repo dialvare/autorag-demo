@@ -1,39 +1,30 @@
-apiVersion: llamastack.io/v1alpha1
-kind: LlamaStackDistribution
+apiVersion: ogx.io/v1beta1
+kind: OGXServer
 metadata:
-  name: llamastack-custom-distribution
-  namespace: llamastack
+  name: ogx-custom-server
+  namespace: ogx
 spec:
-  replicas: 1
-  server:
-    containerSpec:
-      resources:
-        requests:
-          cpu: "250m"
-          memory: "500Mi"
-        limits:
-          cpu: "4"
-          memory: "12Gi"
+  distribution:
+    name: rh
+  workload:
+    replicas: 1
+    overrides:
       env:
         - name: POSTGRES_HOST
-          value: postgres-service.llamastack.svc.cluster.local
+          value: postgres-service.ogx.svc.cluster.local
         - name: POSTGRES_PORT
           value: "5432"
         - name: POSTGRES_DB
-          value: llamastack
+          value: ogx
         - name: POSTGRES_USER
-          value: llamastack
+          value: ogx
         - name: POSTGRES_PASSWORD
           valueFrom:
             secretKeyRef:
               name: postgres-secret
               key: password
-        # Remote MiniLM via VLLM_EMBEDDING_* only. Keep sentence-transformers off
-        # so EMBEDDING_MODEL is not also registered as
-        # sentence-transformers/<name> (AutoRAG picks that broken id).
         - name: ENABLE_SENTENCE_TRANSFORMERS
           value: "false"
-        # Remote LLM
         - name: INFERENCE_MODEL
           valueFrom:
             secretKeyRef:
@@ -85,10 +76,10 @@ spec:
             secretKeyRef:
               name: milvus-secret
               key: MILVUS_CONSISTENCY_LEVEL
-      name: llama-stack
+      name: ogx
       port: 8321
     distribution:
-      name: rh-dev
+      name: 'rh-dev'
     storage:
       size: 20Gi
-      mountPath: /opt/app-root/src/.llama/distributions/rh/
+      mountPath: /opt/app-root/src/.ogx/distributions/rh/

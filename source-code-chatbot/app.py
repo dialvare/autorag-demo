@@ -4,39 +4,29 @@ import re
 import requests
 import streamlit as st
 
-HOST = os.getenv("LLAMA_STACK_HOST", "llama-stack-demo")
-PORT = os.getenv("LLAMA_STACK_PORT", "8321")
-SCHEME = (
-    "https"
-    if os.getenv("LLAMA_STACK_SECURE", "").lower() in ("true", "1", "yes")
-    else "http"
-)
-BASE_URL = f"{SCHEME}://{HOST}:{PORT}/v1"
-API_KEY = (
-    os.getenv("LLAMA_STACK_CLIENT_API_KEY", "").strip()
-    or os.getenv("LLAMA_STACK_API_KEY", "").strip()
-)
+BASE_URL = os.getenv("OGX_CLIENT_BASE_URL", "http://ogx-custom-server-service:8321/v1")
+API_KEY = os.getenv("OGX_CLIENT_API_KEY", "").strip()
 DEFAULT_MODEL = os.getenv("INFERENCE_MODEL", "redhataiqwen3-8b-fp8-dynamic")
 # Optional preferred AutoRAG vs_* id; leave empty so the UI picks the first listed store.
 DEFAULT_VECTOR_STORE = os.getenv("VECTOR_STORE_ID", "").strip()
 MCP_SERVER_LABEL = os.getenv("MCP_SERVER_LABEL", "mariadb-mcp")
 MCP_SERVER_URL = os.getenv(
     "MCP_SERVER_URL",
-    "http://mariadbmcp.llamastack.svc.cluster.local:9001/mcp",
+    "http://mariadbmcp.ogx.svc.cluster.local:9001/mcp",
 )
-MILVUS_HOST = os.getenv("MILVUS_HOST", "milvus-service.llamastack.svc.cluster.local")
+MILVUS_HOST = os.getenv("MILVUS_HOST", "milvus-service.ogx.svc.cluster.local")
 MILVUS_PORT = int(os.getenv("MILVUS_PORT", "19530"))
-REQUEST_TIMEOUT = int(os.getenv("LLAMA_STACK_REQUEST_TIMEOUT", "30"))
-TURN_TIMEOUT = int(os.getenv("LLAMA_STACK_TURN_TIMEOUT", "300"))
-MAX_OUTPUT_TOKENS = int(os.getenv("LLAMA_STACK_MAX_OUTPUT_TOKENS", "2048"))
+REQUEST_TIMEOUT = int(os.getenv("OGX_REQUEST_TIMEOUT", "30"))
+TURN_TIMEOUT = int(os.getenv("OGX_TURN_TIMEOUT", "300"))
+MAX_OUTPUT_TOKENS = int(os.getenv("OGX_MAX_OUTPUT_TOKENS", "2048"))
 # MCP tool schemas alone can consume ~2k tokens; keep headroom under small
 # model context windows (e.g. VLLM_MAX_TOKENS=4096).
-MCP_MAX_OUTPUT_TOKENS = int(os.getenv("LLAMA_STACK_MCP_MAX_OUTPUT_TOKENS", "1024"))
-MAX_RESPONSE_CONTINUATIONS = int(os.getenv("LLAMA_STACK_MAX_RESPONSE_CONTINUATIONS", "2"))
-RAG_MAX_RESULTS = int(os.getenv("LLAMA_STACK_RAG_MAX_RESULTS", "5"))
+MCP_MAX_OUTPUT_TOKENS = int(os.getenv("OGX_MCP_MAX_OUTPUT_TOKENS", "1024"))
+MAX_RESPONSE_CONTINUATIONS = int(os.getenv("OGX_MAX_RESPONSE_CONTINUATIONS", "2"))
+RAG_MAX_RESULTS = int(os.getenv("OGX_RAG_MAX_RESULTS", "5"))
 # Used only for the OpenAI file_search path (stores with indexed files).
-RAG_RANKER = os.getenv("LLAMA_STACK_RAG_RANKER", "weighted").strip()
-RAG_RANKER_ALPHA = float(os.getenv("LLAMA_STACK_RAG_RANKER_ALPHA", "0.5"))
+RAG_RANKER = os.getenv("OGX_RAG_RANKER", "weighted").strip()
+RAG_RANKER_ALPHA = float(os.getenv("OGX_RAG_RANKER_ALPHA", "0.5"))
 # Restrict MCP schemas so prompt+answer fit; override with comma-separated names.
 MCP_ALLOWED_TOOLS = [
     t.strip()
@@ -103,7 +93,7 @@ _INCOMPLETE_THINKING_RE = re.compile(
     re.DOTALL | re.IGNORECASE,
 )
 
-st.set_page_config(page_title="Llama Stack Agent", page_icon="🦙", layout="wide")
+st.set_page_config(page_title="OGX Agent", page_icon="🤖", layout="wide")
 
 
 def _headers():
@@ -314,7 +304,7 @@ def _retrieve_rag_context(
 
 
 def _uses_file_search(store):
-    """OpenAI file_search only works when Llama Stack has indexed files."""
+    """OpenAI file_search only works when OGX has indexed files."""
     return _store_file_count(store) > 0
 
 
@@ -332,7 +322,7 @@ def get_models():
         models = llm_models or models
         if models:
             return models, None
-        return [_resolve_model_id(DEFAULT_MODEL, [])], "Llama Stack returned no models."
+        return [_resolve_model_id(DEFAULT_MODEL, [])], "OGX returned no models."
     except Exception as exc:
         return [DEFAULT_MODEL], _request_error_detail(exc)
 
@@ -381,7 +371,7 @@ def get_vector_stores():
         stores.sort(key=lambda s: (-s["completed_files"], s["name"], s["id"]))
         if stores:
             return stores, None
-        return fallback, "Llama Stack returned no vector stores."
+        return fallback, "OGX returned no vector stores."
     except Exception as exc:
         return fallback, _request_error_detail(exc)
 
@@ -520,7 +510,7 @@ def _extract_response_text(data):
         hint = (
             "The model ran out of output tokens (often spent on hidden reasoning). "
             "Click **Apply Changes and Restart Chat**, ask again, or raise "
-            "`VLLM_MAX_TOKENS` / `LLAMA_STACK_MCP_MAX_OUTPUT_TOKENS`."
+            "`VLLM_MAX_TOKENS` / `OGX_MCP_MAX_OUTPUT_TOKENS`."
         )
         if leftover:
             return f"{leftover}\n\n⚠️ **Incomplete response** ({reason}). {hint}"
@@ -602,7 +592,7 @@ if "messages" not in st.session_state:
 
 with st.sidebar:
     st.header("⚙️ Agent Configuration")
-    st.caption(f"Backend: `{SCHEME}://{HOST}:{PORT}`")
+    st.caption(f"Backend: `{BASE_URL}`")
     st.caption("API: OpenAI-compatible `/v1/responses`")
 
     models, models_error = get_models()
@@ -652,7 +642,7 @@ with st.sidebar:
         if emb:
             st.caption(f"Embedding (from store metadata): `{emb}`")
         if _uses_file_search(selected_store):
-            st.caption("Retrieval: Llama Stack `file_search`")
+            st.caption("Retrieval: OGX `file_search`")
         else:
             st.caption(
                 "Retrieval: AutoRAG Milvus bridge "
@@ -687,15 +677,8 @@ with st.sidebar:
     st.divider()
 
     st.subheader("🛠️ Tools")
-    builtin_tools, builtin_error = get_builtin_tools()
-    if builtin_error:
-        st.caption(f"Built-in tool discovery: {builtin_error}")
 
-    enable_websearch = st.toggle(
-        "Enable Web Search",
-        value="builtin::websearch" in builtin_tools,
-        disabled="builtin::websearch" not in builtin_tools,
-    )
+    enable_websearch = st.toggle("Enable Web Search", value=False)
 
     enable_mcp = st.toggle("Enable MariaDB MCP Server", value=bool(MCP_SERVER_URL))
     if enable_mcp:
@@ -708,12 +691,13 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
 
-st.title("🦙 Intelligent Assistant (Llama Stack)")
+st.title("🤖 Intelligent Assistant (OGX)")
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
         if msg.get("mcp_calls"):
+            st.markdown("")
             with st.expander("MCP tools used", expanded=False):
                 for call in msg["mcp_calls"]:
                     icon = "✅" if call["status"] == "ok" else "❌"
@@ -801,6 +785,7 @@ if prompt := st.chat_input("Type your question here..."):
                 assistant_msg = {"role": "assistant", "content": bot_reply}
                 if mcp_calls:
                     assistant_msg["mcp_calls"] = mcp_calls
+                    st.markdown("")
                     with st.expander("MCP tools used", expanded=False):
                         for call in mcp_calls:
                             icon = "✅" if call["status"] == "ok" else "❌"
@@ -821,7 +806,7 @@ if prompt := st.chat_input("Type your question here..."):
                             )
                 st.session_state.messages.append(assistant_msg)
             except requests.RequestException as exc:
-                st.error("Network error querying Llama Stack:")
+                st.error("Network error querying OGX:")
                 st.write(_request_error_detail(exc))
             except Exception as exc:
                 st.error("RAG / retrieval error:")

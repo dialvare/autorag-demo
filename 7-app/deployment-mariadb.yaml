@@ -2,33 +2,32 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: llama-stack-demo-config
-  namespace: llamastack
+  name: ogx-demo-config
+  namespace: ogx
   labels:
     app: chatbot
     app.kubernetes.io/name: chatbot
-    app.kubernetes.io/part-of: llamastack
+    app.kubernetes.io/part-of: ogx
 data:
-  INFERENCE_MODEL: vllm-inference/redhataiqwen3-8b-fp8-dynamic
-  LLAMA_STACK_HOST: llamastack-custom-distribution-service
-  LLAMA_STACK_PORT: "8321"
+  INFERENCE_MODEL: redhataiqwen3-8b-fp8-dynamic
+  OGX_CLIENT_BASE_URL: http://ogx-custom-server-service:8321/v1
   VECTOR_STORE_ID: pizza-bank-best-pattern
-  LLAMA_STACK_RAG_MAX_RESULTS: "5"
-  LLAMA_STACK_RAG_RANKER: weighted
-  LLAMA_STACK_RAG_RANKER_ALPHA: "0.5"
+  OGX_RAG_MAX_RESULTS: "5"
+  OGX_RAG_RANKER: weighted
+  OGX_RAG_RANKER_ALPHA: "0.5"
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: chatbot
-  namespace: llamastack
+  namespace: ogx
   annotations:
-    app.openshift.io/connects-to: '[{"apiVersion":"v1","kind":"Service","name":"llamastack-custom-distribution-service"}]'
+    app.openshift.io/connects-to: '[{"apiVersion":"v1","kind":"Service","name":"ogx-custom-server-service"}]'
   labels:
     app: chatbot
     app.kubernetes.io/name: chatbot
     app.kubernetes.io/component: chatbot
-    app.kubernetes.io/part-of: llamastack
+    app.kubernetes.io/part-of: ogx
     app.openshift.io/runtime: python
 spec:
   replicas: 1
@@ -40,11 +39,11 @@ spec:
       labels:
         app: chatbot
         app.kubernetes.io/name: chatbot
-        app.kubernetes.io/part-of: llamastack
+        app.kubernetes.io/part-of: ogx
     spec:
       containers:
         - name: chatbot
-          image: quay.io/dgarciap/chatbot:latest
+          image: quay.io/dialvare/chatbot:latest
           imagePullPolicy: Always
           ports:
             - name: http
@@ -65,18 +64,18 @@ spec:
             - name: STREAMLIT_SERVER_ENABLE_CORS
               value: "false"
             - name: MCP_SERVER_URL
-              value: http://mariadbmcp.llamastack.svc.cluster.local:9001/mcp
+              value: http://mariadbmcp.ogx.svc.cluster.local:9001/mcp
             - name: MCP_SERVER_LABEL
               value: mariadb-mcp
-            - name: LLAMA_STACK_MAX_OUTPUT_TOKENS
+            - name: OGX_MAX_OUTPUT_TOKENS
               value: "1024"
-            - name: LLAMA_STACK_MCP_MAX_OUTPUT_TOKENS
+            - name: OGX_MCP_MAX_OUTPUT_TOKENS
               value: "1024"
             - name: MCP_ALLOWED_TOOLS
               value: list_databases,list_tables,get_table_schema,get_table_schema_with_relations,execute_sql,create_database
           envFrom:
             - configMapRef:
-                name: llama-stack-demo-config
+                name: ogx-demo-config
           livenessProbe:
             httpGet:
               path: /_stcore/health
@@ -98,11 +97,11 @@ apiVersion: v1
 kind: Service
 metadata:
   name: chatbot
-  namespace: llamastack
+  namespace: ogx
   labels:
     app: chatbot
     app.kubernetes.io/name: chatbot
-    app.kubernetes.io/part-of: llamastack
+    app.kubernetes.io/part-of: ogx
 spec:
   type: ClusterIP
   selector:
@@ -117,11 +116,11 @@ apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
   name: chatbot
-  namespace: llamastack
+  namespace: ogx
   labels:
     app: chatbot
     app.kubernetes.io/name: chatbot
-    app.kubernetes.io/part-of: llamastack
+    app.kubernetes.io/part-of: ogx
   annotations:
     haproxy.router.openshift.io/timeout: 300s
 spec:
